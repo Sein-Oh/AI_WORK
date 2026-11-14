@@ -335,10 +335,19 @@ def _select_extra(a: Dict[str, Any]) -> List[str]:
     return out
 
 
+SWITCHED: List[str] = []         # --work로 지금 작업 폴더가 바뀐 일 (preview 앞에 알림, 사용자 결정 2026-11-14)
+
+
 def open_work(args: Any, create_for: Optional[str] = None) -> Work:
-    """--work <folder> (switch), else the current work folder, else a new one next to create_for (select --file)."""
+    """--work <folder> (switch), else the current work folder, else a new one next to create_for (select --file).
+    --work는 어느 명령에서나 '그 작업 폴더로 옮겨 가기'이고, 옮겼으면 결과 preview 앞에 알린다 (보기 명령도 같음)."""
     if getattr(args, "work", None):
         work = Work(os.path.abspath(args.work))
+        before = current_work()
+        if not before or os.path.normcase(os.path.abspath(before)) != os.path.normcase(work.folder):
+            SWITCHED.append(f"지금 작업 폴더를 {os.path.basename(work.folder)}(으)로 바꿨습니다"
+                            + (f" (전: {os.path.basename(before)})" if before else "")
+                            + ". 다음 명령도 이 작업 폴더의 표를 씁니다.")
         set_current_work(work.folder)
         return work
     cur = current_work()
@@ -905,16 +914,22 @@ def op_join(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
     ldf2 = ldf.assign(**{f"__k{i}": lk[f"k{i}"].values for i in range(len(lkeys))})
     rdf2 = rdf.drop(columns=[k for k in keys if k in rdf.columns]).assign(**{f"__k{i}": rk[f"k{i}"].values for i in range(len(rkeys))})
     on = [f"__k{i}" for i in range(len(lkeys))]
-    out = ldf2.merge(rdf2, on=on, how="inner").drop(columns=on).reset_index(drop=True)
+    keep_left = bool(args.get("keep_left"))
+    out = ldf2.merge(rdf2, on=on, how="left" if keep_left else "inner").drop(columns=on).reset_index(drop=True)
     dup = int(rk.duplicated().sum())
     warnings = [f"{args['right_name']}에 같은 키가 여러 번 나오는 행이 {dup}개 있어 결과 행이 늘었습니다."] if dup else []
     # 짝이 없어 빠진 행 (양쪽에 있는 행만 남기므로): 몇 행이 빠졌는지 알림 (MBOM 2026-11-14: 110행 중 96행이 말없이 빠짐)
     lset, rset = set(map(tuple, lk.itertuples(index=False))), set(map(tuple, rk.itertuples(index=False)))
     lmiss = sum(1 for t in lk.itertuples(index=False) if tuple(t) not in rset)
     rmiss = sum(1 for t in rk.itertuples(index=False) if tuple(t) not in lset)
-    if lmiss or rmiss:
+    if keep_left and lmiss:
+        warnings.append(f"{args['left_name']}의 {lmiss}행(전체 {len(lk)}행)은 {args['right_name']}에 짝이 없어 {args['right_name']}의 열이 빈 칸입니다.")
+    if keep_left and rmiss:
+        warnings.append(f"짝이 없어 빠진 {args['right_name']} 행: {rmiss}행(전체 {len(rk)}행).")
+    if not keep_left and (lmiss or rmiss):
         warnings.append(f"짝이 없어 빠진 행: {args['left_name']} {lmiss}행(전체 {len(lk)}행), {args['right_name']} {rmiss}행(전체 {len(rk)}행). "
-                        f"한쪽에만 있는 행은 only로 볼 수 있습니다.")
+                        f"한쪽에만 있는 행은 only로 볼 수 있습니다."
+                        + (f" {args['left_name']}의 행을 모두 남기려면 {rt.full_command(argv_now() + ['--keep-left'])}" if lmiss else ""))
     letters = {**lmeta.get("letters", {}), **{rename.get(c, c): v for c, v in rmeta.get("letters", {}).items() if c not in keys}}
     meta = {"letters": letters, "rows": {**lrows, **rrows}, "kinds": {}}
     return out, meta, {"warnings": warnings}
@@ -1257,10 +1272,10 @@ def cmd_join(a: Any) -> Dict[str, Any]:
     work = open_work(a)
     work.check_sources()
     (ln, ls), (rn, rs) = _two(a, work, "left", "right")
-    args = {"on": a.on, "left_name": ln, "right_name": rn}
+    args = {"on": a.on, "left_name": ln, "right_name": rn, "keep_left": bool(a.keep_left)}
     df, meta, info = op_join(args, {"left": work.load(ls), "right": work.load(rs)}, "")
     name = check_name(a.name, work)
-    lineage = f"{name} = {ln}, {rn}을(를) {a.on} 기준으로 짝 맞춤 (양쪽에 있는 행만)"
+    lineage = f"{name} = {ln}, {rn}을(를) {a.on} 기준으로 짝 맞춤 " + (f"({ln}의 행은 모두)" if a.keep_left else "(양쪽에 있는 행만)")
     _sid, ok_ = work.add("join", name, args, {"left": ls, "right": rs}, df, meta, lineage)
     return table_answer("join", work, name, df, meta, lineage, ok_, info["warnings"])
 
@@ -1686,7 +1701,7 @@ def build_cli() -> rt.JsonArgumentParser:
     p.add_argument("--file", help="읽을 파일 (.xlsx, .xlsm, .csv). 만든 표에서 고를 때는 --from (둘 다 없으면 도구가 읽을 것을 묻는다)")
     p.add_argument("--sheet", help="시트 이름 (생략하면 파일을 열었을 때 보이는 시트)")
     p.add_argument("--range", help="읽을 범위 (예: B5:H230, B:H, 왼쪽 위 칸 B5). 생략하면 도구가 표를 찾음")
-    p.add_argument("--from", dest="source", help="고를 표 이름 (생략하면 지금 표)")
+    p.add_argument("--from", dest="source", help="고를 표 이름 (--file이 없으면 꼭 씀)")
     p.add_argument("--columns", help="남길 열 (이름이나 열 글자, ','로 나눔)")
     p.add_argument("--where", help="행 조건 (그리고 ;, 또는 |. 예: \"Level=1;Qty>2\", \"Maker=A|B\")")
     p.add_argument("--name", help="새 표 이름 (생략하면 df1, df2 ...)")
@@ -1703,6 +1718,8 @@ def build_cli() -> rt.JsonArgumentParser:
         p.add_argument("--right", required=True, help="오른쪽 표")
         p.add_argument("--on", required=True, help="키 열 (','로 나눔)")
         p.add_argument("--name", help="새 표 이름")
+        if name == "join":
+            p.add_argument("--keep-left", action="store_true", help="왼쪽 표의 행을 모두 남김 (짝이 없으면 오른쪽 열이 빈 칸)")
 
     p = cmd("diff", "두 표 비교: 추가·삭제 행과 바뀐 칸 (키 열로 짝)")
     p.add_argument("--old", required=True, help="옛 표")
@@ -1755,7 +1772,21 @@ def main(argv: Optional[List[str]] = None) -> None:
     rt.setup_console()
     rt.CURRENT_ARGV = [os.path.abspath(__file__)] + list(sys.argv[1:] if argv is None else argv)
     args = build_cli().parse_args(rt.CURRENT_ARGV[1:])
-    rt.run_cli(lambda: COMMANDS[args.cmd](args), hint="확인할 것: 표 이름, 열 이름, 파일 경로.")
+    rt.run_cli(lambda: _with_switch_notice(args), hint="확인할 것: 표 이름, 열 이름, 파일 경로.")
+
+
+def _with_switch_notice(args: Any) -> Dict[str, Any]:
+    """명령 실행. --work로 지금 작업 폴더가 바뀌었으면 preview(실패면 message) 앞에 그 사실을 붙임."""
+    SWITCHED.clear()
+    try:
+        out = COMMANDS[args.cmd](args)
+    except rt.InputError as e:
+        if SWITCHED and e.args:
+            e.args = (f"{SWITCHED[0]} {e.args[0]}",) + e.args[1:]
+        raise
+    if SWITCHED:
+        out["preview"] = f"{SWITCHED[0]} {out.get('preview', '')}".strip()
+    return out
 
 
 if __name__ == "__main__":

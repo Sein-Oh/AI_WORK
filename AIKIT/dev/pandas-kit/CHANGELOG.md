@@ -9,6 +9,10 @@
   지금 표에서 고르는 명령과 열린(저장된) 통합문서를 읽는 명령을 `[후보]`로, 하나면 `[추천]`. 시험 `test_select_without_file_or_from_stops_and_gives_full_commands`.
 - `chart --kind line`: 같은 `--x` 값이 여러 행이면 합계하지 않고 `warnings` + 막대로 그리는 전체 명령. 시험 `test_chart_sums_repeated_x_limits_bars_and_checks_columns`.
 - `group`: 빈 값 묶음 이름이 `null` -> `(빈 칸)`. 시험 `test_group_names_the_empty_value_group`.
+- `--work`: 지금 작업 폴더를 바꾸면(보기 명령 `show`도) preview 앞에 "지금 작업 폴더를 <이름>(으)로 바꿨습니다"를 붙임 (전에는 말없이 바뀌어
+  다음 명령이 다른 폴더의 같은 이름 표를 썼음). 시험 `test_work_option_says_when_the_current_work_folder_changes`.
+- `join --keep-left`: 왼쪽 표의 행을 모두 남김 (짝이 없으면 오른쪽 열은 빈 칸, 그 행 수 `warnings`). 짝이 없어 빠진 행이 있는 보통 `join`의
+  경고에 `--keep-left`를 붙인 전체 명령. 시험 `test_mbom_join_keep_left_keeps_every_left_row`.
 - 그대로 두기로 한 것: 글자 열의 `=`는 글자 그대로 비교(0.2.1의 경고 유지), `group --sum`은 비율 열도 더함.
 
 ### 스킬

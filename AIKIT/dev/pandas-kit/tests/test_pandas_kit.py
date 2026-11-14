@@ -637,3 +637,33 @@ def test_mbom_join_on_excel_row_keeps_the_original_excel_rows(env, mbom):
     ok(env, "select", "--from", "v2p", "--name", "v2q")
     out = ok(env, "diff", "--old", "v2p", "--new", "v2q", "--on", "경로")
     assert out["count"] == 0
+
+
+def test_mbom_join_keep_left_keeps_every_left_row(env, mbom):
+    """left join (사용자 결정 2026-11-14): --keep-left면 왼쪽 행을 모두 남기고 짝이 없으면 오른쪽 열은 빈 칸."""
+    inner = ok(env, "join", "--left", "v1", "--right", "rt", "--on", "Part Number=Item,Op No")
+    warn = next(w for w in inner["warnings"] if "짝이 없어 빠진 행" in w)
+    fixed = command_args("python x.py " + warn.split("남기려면 python ", 1)[1].split(" ", 1)[1])
+    assert inner["count"] == 4 and fixed[-1] == "--keep-left"
+    out = ok(env, *fixed[:-1], "--keep-left", "--name", "j2")
+    assert out["count"] == 110 and "(v1의 행은 모두)" in out["preview"]
+    assert any("v1의 106행(전체 110행)은 rt에 짝이 없어" in w for w in out["warnings"])
+    rows = ok(env, "show", "--from", "j2", "--columns", "Part Number,Operation")["rows"]
+    assert [r["v1 행"] for r in rows[:3]] == [7, 8, 9] and rows[0]["Operation"] == "최종 조립" and rows[2]["Operation"] is None
+    assert ok(env, "undo")["status"] == "ok" and ok(env, "show", "--from", "v1")["count"] == 110   # 기록으로 다시 만들 수 있음
+
+
+def test_work_option_says_when_the_current_work_folder_changes(env, mbom):
+    """--work는 어느 명령에서나 그 작업 폴더로 옮겨 감 (사용자 결정 2026-11-14), 옮겼으면 preview 앞에 알림."""
+    first = mbom["v1"]["work"]
+    ok(env, "new")
+    other = ok(env, "select", "--file", str(mbom["dir"] / "MBOM_DR200_v2.xlsx"), "--name", "a")["work"]
+    assert other != first
+    out = ok(env, "show", "--from", "v1", "--work", first)
+    assert out["preview"].startswith(f"지금 작업 폴더를 {os.path.basename(first)}(으)로 바꿨습니다 (전: {os.path.basename(other)}).")
+    assert not ok(env, "show", "--from", "v1", "--work", first)["preview"].startswith("지금 작업 폴더를")   # 이미 그 폴더면 조용함
+    assert ok(env, "show", "--from", "v2")["work"] == first                                              # 다음 명령도 그 폴더
+    code, out = run(env, "show", "--from", "a", "--work", other)                                         # a는 other에 있음
+    assert code == 0
+    code, out = run(env, "show", "--from", "zz", "--work", first)
+    assert code == 1 and out["message"].startswith("지금 작업 폴더를")                                       # 실패해도 옮긴 것은 알림

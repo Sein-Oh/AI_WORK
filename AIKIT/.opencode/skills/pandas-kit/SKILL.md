@@ -26,7 +26,7 @@ metadata:
 | 만든 표에서 고르기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" select --from df1 --where "<조건>" --name df2` (열만 `--columns "<열1>,<열2>"`) |
 | 표 보기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" show --from df1` (열만 `--columns "<열1>,<열2>"`) |
 | 두 판 비교 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" diff --old df1 --new df2 --on "<키 열1>,<키 열2>"` |
-| 짝 맞춰 붙이기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" join --left df1 --right df2 --on "<키 열>"` (이름이 다르면 `--on "<왼쪽 열>=<오른쪽 열>"`) |
+| 짝 맞춰 붙이기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" join --left df1 --right df2 --on "<키 열>"` (이름이 다르면 `--on "<왼쪽 열>=<오른쪽 열>"`, 왼쪽 행을 모두 남기려면 `--keep-left`) |
 | 한쪽에만 있는 행 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" only --left df1 --right df2 --on "<키 열>"` |
 | 값별 행 수·합계 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" group --from df1 --by "<열>" --sum "<숫자 열>"` (행 수만이면 `--sum` 없이) |
 | 정렬 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" sort --from df1 --by "<열>"` (큰 것부터 `--desc`) |
@@ -42,7 +42,7 @@ metadata:
 - 조건 연산자: `=`, `!=`, `>`, `<`, `>=`, `<=`, `~`(포함), `!~`(포함 안 함). 날짜는 `2026-12-31`처럼 연-월-일로, 품번·코드는 적힌 그대로(`000125`) 쓴다. 빈 칸은 `"비고="`, 빈 칸 아님은 `"비고!="`. `"Type!=RAW|CONS"`는 RAW도 CONS도 아닌 행.
 - `diff`의 `--on`은 행마다 달라야 한다 (예: `"Parent,Part Number"`). 같은 키가 여러 행이면 도구가 멈추고 알린다.
 - 결과의 `엑셀 행`, `df1 행`은 원본 파일의 행 번호다. 사용자에게 알릴 때 그대로 쓴다.
-- 지난 작업으로 돌아가려면 명령 끝에 `--work "<작업 폴더>"`를 붙인다 (결과의 `work` 값).
+- 지난 작업으로 돌아가려면 명령 끝에 `--work "<작업 폴더>"`를 붙인다 (결과의 `work` 값). 그 뒤 명령도 그 작업 폴더의 표를 쓴다 (바뀌었으면 preview에 나온다).
 
 ## 결과 처리
 `agent_directive` 첫 단어별 행동은 전역 지침 4장대로. 추가로:
