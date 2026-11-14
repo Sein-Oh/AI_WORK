@@ -96,7 +96,7 @@ def _backups(cli, pattern):
 
 
 def test_sources_exist_in_repo_layout():
-    """2026-11-13: C:\\AIKIT은 OpenCode 프로젝트: AIKIT/AGENTS.md(프로젝트 지침), AIKIT/.opencode/skills/<이름>/SKILL.md(기본 스킬 15개).
+    """2026-11-13: C:\\AIKIT은 OpenCode 프로젝트: AIKIT/AGENTS.md(프로젝트 지침), AIKIT/.opencode/skills/<이름>/SKILL.md(기본 스킬 16개).
     opencode.json은 셸·권한·폐쇄망 잠금만 (스킬 경로 없음, setup이 전역 설정에도 합침)."""
     for name, src in su.sources():
         assert os.path.isfile(src), (name, src)

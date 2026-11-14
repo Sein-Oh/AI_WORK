@@ -32,7 +32,7 @@ AIKIT/office-cli/config.json
 # 배포 설치(AIKIT/setup.py): 보관 폴더(data/setup_backup_<시각>). opencode.jsonc(사내 LLM 주소)는 사용자 전역 설정에 두지만 실수로 넣어도 올리지 않게
 AIKIT/data/
 AIKIT/opencode.jsonc
-# C:\AIKIT 프로젝트의 OpenCode 폴더(.opencode): 기본 스킬 15개만 저장소에 넣음 (사용자가 만든 스킬, OpenCode가 만드는 파일은 제외)
+# C:\AIKIT 프로젝트의 OpenCode 폴더(.opencode): 기본 스킬 16개만 저장소에 넣음 (사용자가 만든 스킬, OpenCode가 만드는 파일은 제외)
 AIKIT/.opencode/*
 !AIKIT/.opencode/skills/
 AIKIT/.opencode/skills/*
@@ -51,6 +51,7 @@ AIKIT/.opencode/skills/*
 !AIKIT/.opencode/skills/pandas-kit/
 !AIKIT/.opencode/skills/mbom-diff/
 !AIKIT/.opencode/skills/where-used/
+!AIKIT/.opencode/skills/bom-history/
 # OpenCode가 만들 수 있는 실행 파일 (백그라운드 서비스 정보)
 AIKIT/service.json
 # 배포 때 C:\AIKIT에 함께 두는 것 (저장소에는 넣지 않음)

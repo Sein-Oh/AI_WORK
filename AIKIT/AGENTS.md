@@ -37,6 +37,7 @@
 | 엑셀·CSV 표를 단계별로 고르고 비교 (조건으로 고른 표 df1·df2, BOM 두 판 비교, 한쪽에만 있는 행, 짝 맞춰 붙이기, 표 차트 그림, 새 파일로 저장) | `pandas-kit` |
 | MBOM(Level로 구조를 적은 제조 BOM) 엑셀 두 판에서 바뀐 것 찾기 (추가·삭제·대체 후보·바뀐 칸) | `mbom-diff` |
 | BOM에서 품목이 쓰인 상위 조립체와 제품 1대당 수량 찾기 (역전개) | `where-used` |
+| BOM 한 가지의 변경 이력 (지금까지 두 판 비교한 결과를 시간순으로 모으기) | `bom-history` |
 | 표(Excel/CSV) 데이터로 예측 모델 학습, 성능 개선, 학습 이력 | `ml-train` |
 | 학습용 데이터셋 만들기 (조건·행 번호로 행 뽑기, 행을 학습에서 빼기) | `ml-dataset` |
 | 학습한 모델로 예측, 목표값이 되는 조건 찾기, 조건별 예측, 최적 조건 | `ml-predict` |
@@ -151,7 +152,7 @@ LLM이 아는 방법으로 파이썬 스크립트를 짜서 한다 (가의 일�
 | 무엇 | 파일 (고칠 때도 이것) |
 |---|---|
 | 전역 지침 (이 파일, `C:\AIKIT` 프로젝트의 지침) | `C:\AIKIT\AGENTS.md` |
-| 스킬 (기본 15개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit, mbom-diff, where-used, 그리고 사용자가 만든 스킬) | `C:\AIKIT\.opencode\skills\<스킬 이름>\SKILL.md` (폴더 하나 = 스킬 하나, 스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
+| 스킬 (기본 16개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit, mbom-diff, where-used, bom-history, 그리고 사용자가 만든 스킬) | `C:\AIKIT\.opencode\skills\<스킬 이름>\SKILL.md` (폴더 하나 = 스킬 하나, 스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
 | 셸·권한·폐쇄망 잠금 | `C:\AIKIT\opencode.json` (고친 뒤 `C:\AIKIT\setup.bat`을 다시 실행하면 전역 설정 `%USERPROFILE%\.config\opencode\opencode.json`에 합쳐짐) |
 | 사내 LLM 연결 설정 | `%USERPROFILE%\.config\opencode\opencode.jsonc` |
 | 사람용 사용 가이드 (사용자가 사용법을 물으면 이 파일을 브라우저로 열어 보라고 알림) | `C:\AIKIT\guide\office-cli_사용가이드.html`, `C:\AIKIT\guide\ml-kit_사용가이드.html` |

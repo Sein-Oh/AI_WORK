@@ -2,6 +2,43 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
 
+## [0.2.0] - 2026-11-14
+
+### 기능
+- `history` 명령과 기본 스킬 `bom-history` (사용자 결정 2026-11-14: BOM 변경 이력 추적). diff마다 옛 판 옆 결과 폴더에 기록
+  (`diff_<새 판>_<시각>_기록.json`: 시각, 두 판의 경로·수정 시각·크기, 건수, 결과 파일)을 남기고, `history --file <아무 판>`이 비교로 이어진
+  판들의 기록을 시간순으로 모아 `변경이력_<시각>.csv` 하나로. 기록은 결과 폴더에 있어 도구를 다시 반입해도 남음. setup 기본 스킬 16개.
+  시험 `test_history_collects_the_diffs_of_connected_versions`.
+
+### 수정 (Fable 검토 2026-11-14: 비표준 BOM에서 틀린 답을 VERIFIED로 냄, 재현함)
+- 점 표기 Level(`.1`, `..2`)을 모두 버리고 "두 판이 같습니다"였던 것: 점 표기를 읽음.
+- 한 판만 수량 열 이름이 다르면(`Qty`/`수량`) 비교하지 않고 "두 판이 같습니다"였던 것: 같은 뜻의 열(Level·품번·수량·품명·단위)을 짝지어 비교.
+- 같은 상위 아래 둘이던 품번이 하나가 되면 `#1`을 떼어 짝이 어긋나 "추가 3건, 삭제 6건"이던 것: 짝 맞추는 키는 늘 `#순번`,
+  구분자는 품번의 `/`·`#`과 겹치지 않는 것으로 (품번 `A/100`이 경로와 겹치던 것도). 화면과 변경내용 파일은 전처럼.
+- `VERIFIED` 조건: Level·품번을 읽지 못한 행이 있거나 한쪽 판에만 있는 열을 비교하지 못했으면 preview 첫 줄 `주의:`와 `UNVERIFIED:`
+  (warnings는 뒤에 있어 경량 모델이 빠뜨림). where-used도 같은 규칙.
+- 시험 `test_irregular_boms_are_compared_or_said_plainly`.
+
+### 수정 (집 PC 실기 2026-11-14, `docs/test_logs/집PC_bom_20261114/결과.md`)
+- 결과 폴더와 작업 폴더를 나눔 (사용자 결정 2026-11-14, Fable 검토 B): 결과는 원본 옆 `<원본 이름>_bom\`에 실행마다 시각을 붙인 새 이름
+  (`diff_<새 판>_<시각>_요약.txt`·`_변경내용.csv`·`_칠할칸_옛판/새판.csv`, `쓰인곳_<찾는 말>_<시각>.csv`)으로 두고 덮어쓰지 않으며(R4), pandas-kit 작업 폴더는
+  캐시라 실행마다 지운다. 0.1.1은 `<파일 이름>_<시각>` 폴더가 실행마다 쌓였고(B3~B9 뒤 5개), 검토 중 넣었던 "원본·명령당 1개" 규칙은
+  이미 알려 준 `output_file`과 칠할 칸 파일을 지워(다른 `--find`, 같은 옛 판의 다른 새 판) 다음 턴의 `confirm_commands`가 실패했다.
+  결과 JSON의 `work` 대신 `result_folder`.
+- 안의 파일이 열린 작업 폴더 (B9): `shutil.rmtree`가 표시 파일·스냅샷부터 지우고 열린 csv에서 멈춰, 표시 파일이 없어 다시는 못 지우는
+  폴더가 남았다. 이제 폴더 이름부터 바꿔 보고(Windows는 열린 파일이 든 폴더 이름을 못 바꿈) 안 되면 손대지 않고,
+  `works.json`의 "못 지운 폴더"로 기억했다가 다음 실행 때 다시 지운다 (`works.json`은 임시 파일 뒤 바꿔 넣기).
+- 두 실행을 동시에 하면 둘 다 멈추던 것 (Fable 검토 A2): pandas-kit 데이터 폴더(지금 작업 포인터)를 실행마다 따로 쓴다.
+  멈춘 실행의 message에 pandas-kit 명령 문장이 새어 나오던 것도 뺌.
+- `where-used`가 30곳을 넘으면 preview 끝에 `(나머지 N줄은 <output_file>)` (diff와 같은 모양). 전에는 preview를 그대로 전하면 30곳만 보였다.
+- `where-used`에 숨긴 행이 걸리면 `warnings`에 엑셀 행과 품번 (B4: 숨긴 폐기 품목 110099가 '나사' 결과와 합계에 들어감).
+  pandas-kit 0.2.10 `select`의 `hidden_rows`를 씀.
+- 틀린 명령 이름의 message에서 argparse 영어 문장(`argument cmd: invalid choice ...`)을 빼고 한국어만.
+- 시험: `test_results_stay_in_one_result_folder_and_work_folders_are_removed`, `test_two_bom_runs_at_once_both_finish`,
+  `test_a_work_folder_with_an_open_file_is_left_whole_and_removed_next_time`,
+  `test_more_than_thirty_places_say_where_the_rest_is`, `test_a_word_in_the_name_finds_every_part_and_counts_them_apart`(숨긴 행 경고),
+  `test_misspelt_command_name_gives_candidates`(Windows에서 bash 따옴표로 감싼 경로를 못 나누던 시험 고침).
+
 ## [0.1.1] - 2026-11-14
 
 ### 수정 (저장소 점검에서 직접 써 보며)

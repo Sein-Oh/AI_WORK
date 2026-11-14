@@ -4,7 +4,7 @@ description: BOM 엑셀에서 한 품목이 어느 상위 조립체에 쓰였는
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "0.1.1"
+  version: "0.2.0"
   platform: windows
 ---
 
