@@ -48,7 +48,7 @@ def test_v2_mod_changes_are_found_exactly_and_traps_are_not_changes(env, files):
     purposes = [c["purpose"] for c in out["confirm_commands"]]    # 두 원본에 칠하는 office-cli 명령, 행과 칸을 나눠 셈
     assert len(purposes) == 2 and "삭제된 3행, 바뀐 칸 8곳" in purposes[0] and "추가된 3행, 바뀐 칸 8곳" in purposes[1], purposes
     assert "office-cli" in out["confirm_commands"][0]["command"] or "excel.py" in out["confirm_commands"][0]["command"]
-    assert out["counts"] == {"대체 후보": 1, "추가": 2, "삭제": 2, "바뀐 칸": 8}
+    assert out["counts"] == {"상위 삭제": 0, "대체 후보": 1, "추가": 2, "삭제": 2, "바뀐 칸": 8}
     text = out["preview"]
     assert text.startswith("변경 대체 후보 1건, 추가 2건, 삭제 2건, 바뀐 칸 8곳 (7개 품목).") and "[이동]" not in text
     for line in ("[삭제] 110040: DR-200/100100 아래 (옛 엑셀 행 17)", "[추가] 110040: DR-200 아래 (새 엑셀 행 109)",
@@ -67,7 +67,7 @@ def test_v2_mod_changes_are_found_exactly_and_traps_are_not_changes(env, files):
 
 def test_v1_to_v2_and_same_file(env, files):
     out, _ = compare(files / "MBOM_DR200.xlsx", files / "MBOM_DR200_v2.xlsx")
-    assert out["counts"] == {"대체 후보": 0, "추가": 0, "삭제": 1, "바뀐 칸": 2}
+    assert out["counts"] == {"상위 삭제": 0, "대체 후보": 0, "추가": 0, "삭제": 1, "바뀐 칸": 2}
     assert "[삭제] 110050: DR-200/100100 아래" in out["preview"]
     out, rows = compare(files / "MBOM_DR200_v2.xlsx", files / "MBOM_DR200_v2.xlsx")
     assert rows == [] and out["count"] == 0 and out["preview"].startswith("두 판이 같습니다 (찾은 변경 없음).")
@@ -116,3 +116,56 @@ def test_paths_number_repeated_parts_and_warn_level_jumps():
         ("7", "P", "TOP/S#2/P/X"), ("8", "TOP", "TOP/Q"), ("9", "Q", "TOP/Q/Z")]
     warns = bk.tree_warnings(t, "옛 판")
     assert any("건너뛴 행 1개 (엑셀 행 9)" in w for w in warns) and any("품번이 빈 행 1개" in w and "엑셀 행 10" in w for w in warns)
+
+
+def _bom_xlsx(path, rows, blank_after=()):
+    """머리글 1행 B열부터, blank_after의 행 번호(데이터 몇 번째) 뒤에 빈 행."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "MBOM"
+    ws.append([None, "Level", "Part Number", "Qty"])
+    for i, r in enumerate(rows, 1):
+        ws.append([None, *r])
+        if i in blank_after:
+            ws.append([])
+    wb.save(path)
+    return path
+
+
+def test_a_removed_parent_is_one_line_and_its_children_are_not_painted(env, tmp_path):
+    """상위만 지워져 하위가 다른 상위 아래에 그대로 붙은 것은 한 줄 (집 PC 2026-11-14 sample1·2: 상위 2개 삭제가
+    '추가 38, 삭제 39'로 나왔음, 사용자 결정). 하위 행은 세지도 칠하지도 않고, 그 안의 진짜 삭제는 따로."""
+    old = _bom_xlsx(tmp_path / "o.xlsx", [(0, "TOP", 1), (1, "A", 1), (2, "A1", 2), (1, "G", 1), (2, "G1", 1), (3, "R", 2),
+                                          (2, "G2", 3), (2, "G3", 1)])
+    new = _bom_xlsx(tmp_path / "n.xlsx", [(0, "TOP", 1), (1, "A", 1), (2, "A1", 2), (2, "G1", 1), (3, "R", 2), (2, "G2", 3)])
+    code, d = bom("diff", "--old", old, "--new", new)
+    assert code == 0 and d["verified"], d
+    assert d["counts"] == {"상위 삭제": 1, "대체 후보": 0, "추가": 0, "삭제": 1, "바뀐 칸": 0}
+    assert d["lines"] == ["[상위 삭제] G: TOP 아래 (옛 엑셀 행 5). 그 하위 3행은 새 판에서 TOP/A 아래에 그대로 있음 "
+                          "(옛 엑셀 행 6~8, 새 엑셀 행 5~7)",
+                          "[삭제] G3: TOP/G 아래 (옛 엑셀 행 9)"]
+    from bk_helpers import command_args
+    paint = {c["purpose"].split("의", 1)[0]: command_args(c["command"]) for c in d["confirm_commands"]}
+    with open(paint["원본 o.xlsx"][paint["원본 o.xlsx"].index("--file") + 1], encoding="utf-8-sig") as f:
+        old_cells = f.read().split()
+    assert old_cells == ["B5:D5", "B9:D9"] and not any(k.startswith("원본 n.xlsx") for k in paint)   # 새 판은 칠할 것 없음
+
+
+def test_both_versions_with_blank_rows_ask_the_range_once(env, tmp_path):
+    """두 판 모두 표 안에 빈 행이 있으면 범위를 한 번에 묻고, 1번은 두 판 모두 한 표로 (집 PC 2026-11-14: 두 번 물었음)."""
+    from bk_helpers import command_args
+    rows = [(0, "TOP", 1), (1, "A", 1), (2, "A1", 2), (1, "B", 1), (2, "B1", 2), (2, "B2", 1), (2, "B3", 1)]
+    old = _bom_xlsx(tmp_path / "o.xlsx", rows, blank_after=(3,))
+    new = _bom_xlsx(tmp_path / "n.xlsx", rows[:4] + [(2, "B1", 5)] + rows[5:], blank_after=(3,))
+    code, d = bom("diff", "--old", old, "--new", new)
+    assert code == 1 and d["error_type"] == "needs_user_decision"
+    assert d["message"].startswith("옛 판과 새 판을 읽다가 멈췄습니다: 두 판 모두 빈 행으로 나뉜 덩어리가 있어")
+    assert "[후보] 1) 두 판 모두 빈 행까지 한 표로 (옛 판 B1:D9" in d["message"] and "2) 옛 판 B1:D4만" in d["message"]
+    first = command_args(d["confirm_commands"][0]["command"])
+    assert first[-4:] == ["--old-range", "B1:D9", "--new-range", "B1:D9"]
+    code, d = bom(*first)
+    assert code == 0 and d["lines"] == ["[바뀜] B1 (TOP/B 아래): Qty 2 -> 5 (옛 엑셀 행 7, 새 엑셀 행 7)"]
+    plain = _bom_xlsx(tmp_path / "p.xlsx", rows)                                 # 새 판은 빈 행 없음: 옛 판만 물음
+    code, d = bom("diff", "--old", old, "--new", plain)
+    assert code == 1 and d["message"].startswith("옛 판을(를) 읽다가 멈췄습니다") and "두 판 모두" not in d["message"]

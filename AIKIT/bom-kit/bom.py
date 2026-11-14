@@ -434,7 +434,8 @@ def _pk_error(out: Dict[str, Any], who: str) -> Exception:
     cmds = [c.get("command", "") for c in out.get("confirm_commands") or []]
     if "[추천] " in msg:
         cmds = [msg.split("[추천] ", 1)[1]]
-    fixed = []
+    fixed: List[List[str]] = []
+    picks: List[Tuple[str, str]] = []
     for c in cmds:
         try:
             parts = shlex.split(c)
@@ -448,6 +449,7 @@ def _pk_error(out: Dict[str, Any], who: str) -> Exception:
         # 새 판에서 물으면 새 판만 (--new-sheet), 범위는 판마다 다름 (--old-range, --new-range)
         name = opt if not side or (side == "old" and opt == "--sheet") else f"--{side}-{opt[2:]}"
         fixed.append(argv_setting(name, parts[parts.index(opt) + 1]))
+        picks.append((name, parts[parts.index(opt) + 1]))
     if fixed and "[추천] " in msg:
         return rt.InputError(pre + msg.split("[추천] ", 1)[0] + f"[추천] {rt.full_command(fixed[0])}")
     if fixed:
@@ -455,6 +457,7 @@ def _pk_error(out: Dict[str, Any], who: str) -> Exception:
         if len(labels) == len(fixed):
             err = rt.ask(labels, fixed, msg.split(" [후보]", 1)[0].removesuffix("을(를) 정해야 합니다."))
             err.args = (pre + err.args[0],) + err.args[1:]
+            err.choices = list(zip(labels, picks))          # _diff가 두 판의 범위를 한 번에 물을 때 씀
             return err
     # 그 밖의 실패(파일 없음, 저장 안 된 문서 등)는 그대로 알림 (pandas-kit 명령은 주지 않음: 이어서 할 일은 bom.py 하나)
     text = re.sub(r" ?\[(추천|후보)\].*$", "", msg)
@@ -511,10 +514,74 @@ def _siblings(path: str) -> Dict[str, Tuple[str, str]]:
     return spot
 
 
+def _pns(key: str) -> List[str]:
+    return [p.rpartition(KEY_NUM)[0] for p in key.split(KEY_SEP)]
+
+
+def _row_no(v: Any) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def _removed_parents(dels: List[Tuple[str, str]], adds: List[Tuple[str, str]]):
+    """상위 행이 지워져 그 하위가 새 판에서 다른 상위 아래로 붙은 것 (Level만 보고 상위를 정하므로 바로 위 형제에 붙음).
+    지운 상위마다 하위를 행 순서대로 같은 상대 경로(품번)의 추가 행과 짝지음 (집 PC 2026-11-14 sample1·2: 상위 2개를 지웠는데
+    하위 수십 행이 '삭제 + 추가'로 나와 추가 38, 삭제 39였음). -> [(상위 키, 옛 행, 새 상위 키, [(옛 키, 옛 행, 새 키, 새 행)])]"""
+    used_d, used_a, out = set(), set(), []
+    adds_sorted = sorted(adds, key=lambda x: _row_no(x[1]))
+    for pk_, prow in sorted(dels, key=lambda x: (len(x[0].split(KEY_SEP)), _row_no(x[1]))):
+        if pk_ in used_d:
+            continue
+        plen = len(pk_.split(KEY_SEP))
+        desc = sorted([(k, r) for k, r in dels if k.startswith(pk_ + KEY_SEP) and k not in used_d], key=lambda x: _row_no(x[1]))
+        if not desc:
+            continue
+        best: Dict[str, List[Tuple[str, str, str, str]]] = {}
+        for x in {KEY_SEP.join(ak.split(KEY_SEP)[:len(_pns(ak)) - len(_pns(dk)[plen:])])
+                  for dk, _ in desc for ak, _ in adds_sorted
+                  if ak not in used_a and len(_pns(ak)) > len(_pns(dk)[plen:]) and _pns(ak)[-len(_pns(dk)[plen:]):] == _pns(dk)[plen:]}:
+            pairs, taken, last = [], set(), -1.0
+            for dk, dr in desc:                          # 행 순서를 지키며 같은 상대 경로의 추가 행과 짝
+                rel = _pns(dk)[plen:]
+                for ak, ar in adds_sorted:
+                    if ak in used_a or ak in taken or _row_no(ar) <= last or not ak.startswith(x + KEY_SEP):
+                        continue
+                    if _pns(ak)[len(x.split(KEY_SEP)):] == rel:
+                        pairs.append((dk, dr, ak, ar))
+                        taken.add(ak)
+                        last = _row_no(ar)
+                        break
+            if len(pairs) > len(best.get("p", [])):
+                best = {"x": [x], "p": pairs}
+        pairs = best.get("p", [])
+        if not pairs or len(pairs) * 2 < len(desc):     # 하위의 절반도 못 찾으면 묶지 않음 (짐작하지 않음)
+            continue
+        used_d.add(pk_)
+        used_d.update(p[0] for p in pairs)
+        used_a.update(p[2] for p in pairs)
+        out.append((pk_, prow, best["x"][0], pairs))
+    return out
+
+
 def summarize(rows: List[Dict[str, str]], ocol: str, ncol: str, order: Optional[List[Dict[str, Tuple[str, str]]]] = None):
     dels = [(r["경로"], r.get(ocol) or "") for r in rows if r["구분"] == "삭제"]
     adds = [(r["경로"], r.get(ncol) or "") for r in rows if r["구분"] == "추가"]
-    lines, counts = [], {"대체 후보": 0, "추가": 0, "삭제": 0, "바뀐 칸": 0}
+    lines, counts = [], {"상위 삭제": 0, "대체 후보": 0, "추가": 0, "삭제": 0, "바뀐 칸": 0}
+    moved_rows: Dict[str, set] = {"old": set(), "new": set()}
+    for pk_, prow, new_parent, pairs in _removed_parents(dels, adds):
+        parent, pn = split(pk_)
+        lines.append(f"[상위 삭제] {pn}: {where(parent)} (옛 엑셀 행 {prow}). 그 하위 {len(pairs)}행은 새 판에서 "
+                     f"{SHOWN.get(new_parent, new_parent)} 아래에 그대로 있음 (옛 엑셀 행 {pairs[0][1]}~{pairs[-1][1]}, "
+                     f"새 엑셀 행 {pairs[0][3]}~{pairs[-1][3]})")
+        counts["상위 삭제"] += 1
+        gone = {pk_} | {p[0] for p in pairs}
+        dels = [d for d in dels if d[0] not in gone]
+        adds = [x for x in adds if x[0] not in {p[2] for p in pairs}]
+        moved_rows["old"].update(str(p[1]) for p in pairs)
+        moved_rows["new"].update(str(p[3]) for p in pairs)
+    summarize.moved_rows = moved_rows                    # _diff가 칠할 칸 목록에서 뺌
     # 대체 후보: 같은 상위 아래, 앞이나 뒤의 형제 품번이 같은 자리 (형제 순서를 모르면 삭제 하나·추가 하나일 때만).
     # 같은 품번이 삭제와 추가에 모두 있으면 옮겨진 품목이라 대체 짝에서 뺌 (삭제·추가로 둠)
     moved = {split(x[0])[1] for x in dels} & {split(x[0])[1] for x in adds}
@@ -605,8 +672,40 @@ def _paired_changes(o: Dict[str, Any], n: Dict[str, Any], pairs: List[Tuple[str,
     return rows
 
 
+WHOLE = "빈 행까지 한 표로"                 # pandas-kit이 빈 행으로 나뉜 표에서 주는 첫 [후보]
+
+
+def _ask_both_ranges(e: Exception, pk: PandasKit, a: Any) -> Exception:
+    """옛 판이 빈 행 때문에 범위를 물으면, 새 판도 같은지 읽어 보고 같으면 두 판의 범위를 한 번에 묻는다
+    (집 PC 2026-11-14 sample1·2: 옛 판, 새 판을 한 번씩 두 번 물었음). 첫 [후보]는 두 판 모두 한 표로."""
+    old = [c for c in getattr(e, "choices", None) or [] if c[1][0] == "--old-range"]
+    if a.new_range or not old or not old[0][0].startswith(WHOLE):
+        return e
+    try:
+        read_bom(pk, a.new, "new", "새 판", a.new_sheet or a.sheet, a.new_range)
+        return e                                         # 새 판은 그대로 읽힘: 옛 판만 물음
+    except rt.InputError as e2:
+        new = [c for c in getattr(e2, "choices", None) or [] if c[1][0] == "--new-range"]
+    if not new or not new[0][0].startswith(WHOLE):
+        return e
+
+    def inner(label: str) -> str:
+        m = re.search(r"\((.*)\)", label)
+        return m.group(1) if m else label
+    both = argv_setting(*old[0][1])
+    both = both + [new[0][1][0], new[0][1][1]] if new[0][1][0] not in both else both
+    labels = [f"두 판 모두 {WHOLE} (옛 판 {inner(old[0][0])}, 새 판 {inner(new[0][0])})"] + [f"옛 판 {c[0]}" for c in old[1:]]
+    argvs = [both] + [argv_setting(*c[1]) for c in old[1:]]
+    err = rt.ask(labels, argvs, "두 판 모두 빈 행으로 나뉜 덩어리가 있어 읽을 범위")
+    err.args = ("옛 판과 새 판을 읽다가 멈췄습니다: " + err.args[0],) + err.args[1:]
+    return err
+
+
 def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
-    o_csv, o_read, _ = read_bom(pk, a.old, "old", "옛 판", a.old_sheet or a.sheet, a.old_range)
+    try:
+        o_csv, o_read, _ = read_bom(pk, a.old, "old", "옛 판", a.old_sheet or a.sheet, a.old_range)
+    except rt.InputError as e:
+        raise _ask_both_ranges(e, pk, a) from None
     n_csv, n_read, _ = read_bom(pk, a.new, "new", "새 판", a.new_sheet or a.sheet, a.new_range)
     o, n = _paths(o_csv, a.level, a.part, "옛 판"), _paths(n_csv, a.level, a.part, "새 판")
     for d in (o, n):
@@ -640,7 +739,9 @@ def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
     shown_rows = [dict(r, 경로=SHOWN.get(r["경로"], r["경로"])) for r in rows]
     changes, _ok = write_csv(stem + "_변경내용.csv", head_cols, [[r.get(c, "") for c in head_cols] for r in shown_rows], "변경내용 파일")
     order = [_siblings(o["save"]), _siblings(n["save"])]
+    summarize.moved_rows = {"old": set(), "new": set()}
     lines, counts, nrows = summarize(rows, "oldp 행", "newp 행", order) if rows else ([], {}, 0)
+    moved = summarize.moved_rows
     head = ("두 판이 같습니다 (찾은 변경 없음)." if not lines else
             "변경 " + ", ".join(f"{k} {v}" + ("곳" if k == "바뀐 칸" else "건") for k, v in counts.items() if v)
             + (f" ({nrows}개 품목)" if counts.get("바뀐 칸") else "") + ".")
@@ -668,9 +769,25 @@ def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
     paint = diff.get("confirm_commands") or []
     for f in diff.get("paint_files") or []:              # 칠할 칸 목록도 결과 폴더로 (confirm_commands가 다음 턴에도 되게)
         side = "옛판" if "_칠할칸_old_" in os.path.basename(f) else "새판"
-        kept = _keep(f, f"{stem}_칠할칸_{side}.csv", "칠할 칸 파일")
-        for c in paint:
-            c["command"] = c["command"].replace(rt.quote_arg(f), rt.quote_arg(kept))
+        drop = moved["old" if side == "옛판" else "new"]   # 상위만 지워져 다른 상위에 붙은 하위 행은 칠하지 않음
+        cells = [x for x in rt.read_text_file(f).splitlines() if x.strip()
+                 and not set(re.findall(r"[A-Z]+(\d+)", x)) & drop]
+        cmd = next((c for c in paint if rt.quote_arg(f) in c["command"]), None)
+        if not cells:
+            if cmd:
+                paint.remove(cmd)
+            continue
+        text = "\n".join(cells) + "\n"
+
+        def writer(p_: str, text: str = text) -> None:
+            with open(p_, "w", encoding="utf-8-sig") as h:
+                h.write(text)
+        kept = rt.save_with_lock_fallback(f"{stem}_칠할칸_{side}.csv", writer, "칠할 칸 파일")
+        if cmd:
+            cmd["command"] = cmd["command"].replace(rt.quote_arg(f), rt.quote_arg(kept))
+            if drop:
+                orig = os.path.basename(a.old if side == "옛판" else a.new)
+                cmd["purpose"] = f"원본 {orig}의 {'삭제된' if side == '옛판' else '추가된'} 행과 바뀐 칸을 노랗게 칠하기 (사용자가 원할 때만, office-cli)"
     kept_paint = [f"{stem}_칠할칸_{x}.csv" for x in ("옛판", "새판") if os.path.isfile(f"{stem}_칠할칸_{x}.csv")]
     _write_record(stem, a, counts, head, save, changes, kept_paint, verified)     # history가 읽는 기록
     if paint:                                    # 원본에 바뀐 칸 칠하기 (office-cli, 사용자가 원할 때만)

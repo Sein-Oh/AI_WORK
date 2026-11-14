@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 TOOL_NAME = "bom-kit"
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_ENV = "BOM_KIT_DATA_DIR"

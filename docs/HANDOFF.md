@@ -4,7 +4,7 @@
 [`history/HANDOFF_2026-11-12.md`](history/HANDOFF_2026-11-12.md) (CHANGELOG의 "HANDOFF 3-25" 같은 참조는 그 파일의 절).
 
 ## 1. 지금 상태
-- 버전: ml-kit 2.9.92, office-cli 1.6.7, pandas-kit 0.2.10, bom-kit 0.2.0. 작업 브랜치는 세션마다 새로 받음 (머지는 사용자가 정함).
+- 버전: ml-kit 2.9.92, office-cli 1.6.7, pandas-kit 0.2.11, bom-kit 0.2.1. 작업 브랜치는 세션마다 새로 받음 (머지는 사용자가 정함).
 - 배포: `C:\AIKIT` 한 폴더 (도구, `.opencode\skills\`, `dev\`, `guide\`, `AGENTS.md`, `opencode.json`, `setup.bat`, `web.bat`). `C:\AIKIT`은 OpenCode 프로젝트
   (우리 도구는 이 폴더를 프로젝트로 열 때만). 사내 LLM 설정(`opencode.jsonc`)과 폐쇄망 잠금은 사용자 전역 설정 `%USERPROFILE%\.config\opencode` (2026-11-13).
 - 기본 스킬 16개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit(0.2.8, 기반 도구), mbom-diff·where-used·bom-history(bom-kit 0.1.0 + pandas-kit).

@@ -4,7 +4,7 @@ description: BOM 엑셀 한 가지의 변경 이력을 보여 준다 (bom-kit �
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
   platform: windows
 ---
 
