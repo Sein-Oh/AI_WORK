@@ -312,3 +312,70 @@ def test_second_round_tables_are_rebuilt_from_the_record(t):
     for n, rows in before.items():
         out = ok(env, "show", "--from", n)
         assert out["rows"] == rows and any("작업 기록으로 다시 만듦" in r for r in out["recovered"]), n
+
+
+# ---------------------------------------------------------------------------
+# 3차: pivot, calc의 round()·abs()
+# ---------------------------------------------------------------------------
+
+def test_pivot_spreads_a_column_into_columns(t):
+    env = t["env"]
+    out = ok(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "UoM", "--sum", "Qty", "--name", "p")
+    assert out["count"] == 3 and "Maker(행) x UoM(열 2개)로 펼침 (Qty 합계)" in out["preview"]
+    assert [(r["Maker"], r["EA"], r["KG"]) for r in rows_of(env, "p")] == [("A", 3, 0.5), ("B", 4, None), ("C", 3, None)]
+    out = ok(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "UoM", "--name", "n")           # 값 옵션 없음: 행 수
+    assert [(r["Maker"], r["EA"], r["KG"]) for r in rows_of(env, "n")] == [("A", 2, 1), ("B", 2, 0), ("C", 1, 0)] and "(행 수)" in out["preview"]
+    out = ok(env, "pivot", "--from", "t", "--rows", "UoM", "--cols", "Maker", "--mean", "Unit Price", "--name", "m")
+    assert rows_of(env, "m")[0]["A"] == 5.75 and rows_of(env, "m")[1]["A"] is None
+    out = ok(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "Note", "--count", "Part Number")
+    assert "(빈 칸)" in [c["name"] for c in out["columns"]]
+    assert ok(env, "pivot", "--from", "none", "--rows", "Maker", "--cols", "UoM")["count"] == 0
+
+
+def test_pivot_mistakes_and_unit_warning(t):
+    env = t["env"]
+    code, out = run(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "UoM,Note")
+    assert code == 1 and recommended(out["message"])[-2:] == ["--cols", "UoM"]
+    code, out = run(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "UoM", "--sum", "Qty", "--mean", "Qty")
+    assert code == 1 and "값 옵션은 하나만" in out["message"]
+    code, out = run(env, "pivot", "--from", "t", "--rows", "Makr", "--cols", "UoM")
+    assert code == 1 and "[후보] 1) Maker" in out["message"]
+    code, out = run(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "UoM", "--sum", "Desc")
+    assert code == 1 and "[후보] 1) Qty 2) Unit Price" in out["message"]
+    code, out = run(env, "pivot", "--from", "t", "--rows", "Maker;Desc", "--cols", "UoM")
+    assert code == 1 and recommended(out["message"])[4] == "Maker,Desc"
+    code, out = run(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "Maker")
+    assert code == 1 and "모두 있습니다" in out["message"]
+    out = ok(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "Desc", "--sum", "Qty")       # 한 칸에 EA와 KG는 없음
+    assert not out.get("warnings")
+    out = ok(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "Note", "--sum", "Qty")       # A의 (빈 칸)은 없고...
+    rows = [("A", "x", 1, "EA"), ("A", "x", 2, "KG"), ("B", "y", 3, "EA")]
+    ok(env, "select", "--file", make_parts(env["dir"] / "u.xlsx", rows, ["Maker", "Kind", "Qty", "UoM"]), "--name", "u")
+    out = ok(env, "pivot", "--from", "u", "--rows", "Maker", "--cols", "Kind", "--sum", "Qty")
+    assert any("'UoM' 열의 단위가 다른 행을 한 칸에 계산한 곳이 1칸" in w for w in out["warnings"])
+
+
+def test_calc_round_and_abs(t):
+    env = t["env"]
+    out = ok(env, "calc", "--from", "t", "--expr", "r=round(Qty*[Unit Price]/3, 2);a=abs(Qty-2);h=round(Qty+0.5)", "--name", "c")
+    rows = rows_of(env, "c")
+    assert [r["r"] for r in rows] == [1, 0.67, 3.33, 0.5, None, 0]
+    assert [r["a"] for r in rows] == [0, 2, 1, 1, 1.5, 2]
+    assert [r["h"] for r in rows] == [3, 5, 2, 4, 1, 1]                      # 2.5 -> 3, 0.5 -> 1 (엑셀처럼 5에서 올림)
+    for bad, word in (("a=round(Qty, 1.5)", "자릿수"), ("a=round(Qty, Qty)", "자릿수"), ("a=abs(Qty, 1)", "값의 수"), ("a=round()", "읽을 수 없습니다"),
+                      ("a=sqrt(Qty)", "함수는 쓸 수 없음")):
+        code, out = run(env, "calc", "--from", "t", "--expr", bad)
+        assert code == 1 and word in out["message"], (bad, out["message"])
+    code, out = run(env, "calc", "--from", "t", "--expr", "a=round(Qty, 1),b=abs(Qty)")       # 괄호 안의 ','는 그대로
+    assert code == 1 and recommended(out["message"])[-1] == "a=round(Qty, 1);b=abs(Qty)"
+
+
+def test_third_round_tables_are_rebuilt_from_the_record(t):
+    env = t["env"]
+    ok(env, "pivot", "--from", "t", "--rows", "Maker", "--cols", "UoM", "--sum", "Qty", "--name", "p")
+    ok(env, "calc", "--from", "t", "--expr", "r=round(Qty/3, 1);a=abs(-Qty)", "--name", "c")
+    before = {n: rows_of(env, n) for n in "pc"}
+    drop_snapshots(t["work"])
+    for n, rows in before.items():
+        out = ok(env, "show", "--from", n)
+        assert out["rows"] == rows and any("작업 기록으로 다시 만듦" in r for r in out["recovered"]), n

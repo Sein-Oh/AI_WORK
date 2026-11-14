@@ -1551,11 +1551,12 @@ def op_unique(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]
 
 # --- calc: 식을 직접 해석 (eval/exec를 쓰지 않음). 허용: 열 이름, [열 이름], 숫자, + - * /, 괄호 ---------------------------
 
-CALC_FUNCS: Dict[str, Tuple[int, int]] = {}            # 함수 이름 -> (인자 수 최소, 최대)
+CALC_FUNCS: Dict[str, Tuple[int, int]] = {"round": (1, 2), "abs": (1, 1)}     # 함수 이름 -> (인자 수 최소, 최대)
+ROUND_MAX = 9                                          # round(x, n)의 n: 0~9
 _CALC_STOP = r"\s+\-*/()\[\],"                        # 감싸지 않은 열 이름에 쓸 수 없는 글자
 _CALC_TOKEN = re.compile(rf"\s*(?:(\d+(?:\.\d+)?)(?![^{_CALC_STOP}])|\[([^\]]+)\]|([+\-*/(),])|([^{_CALC_STOP}]+))")
 CALC_TOKENS_MAX = 200
-CALC_HELP = "식에는 열 이름, 숫자, + - * /, 괄호만 씁니다. 공백이나 기호가 든 열 이름은 [열 이름]으로 감쌉니다 (예: 금액=Qty*[Unit Price])."
+CALC_HELP = "식에는 열 이름, 숫자, + - * /, 괄호, round(식, 자릿수), abs(식)만 씁니다. 공백이나 기호가 든 열 이름은 [열 이름]으로 감쌉니다 (예: 금액=Qty*[Unit Price])."
 
 
 def _calc_tokens(text: str) -> List[Tuple[str, str]]:
@@ -1649,6 +1650,10 @@ class _CalcParser:
                 low, high = CALC_FUNCS[fn]
                 if not low <= len(args) <= high:
                     raise self.fail(f"{fn}()에 넣는 값의 수가 맞지 않음")
+                if fn == "round" and len(args) == 2:
+                    digits = args[1]
+                    if digits[0] != "num" or not float(digits[1]).is_integer() or not 0 <= digits[1] <= ROUND_MAX:
+                        raise self.fail(f"round(식, 자릿수)의 자릿수는 0~{ROUND_MAX}의 숫자")
                 return ["call", fn, args]
             return ["col", val]
         if (kind, val) == ("op", "("):
@@ -1729,6 +1734,14 @@ def _calc_value(node: List[Any], df: Any, note: Dict[str, Any]) -> Any:
 
 
 def _calc_call(fn: str, values: List[Any], node: List[Any]) -> Any:
+    """abs(식), round(식, 자릿수): 반올림은 엑셀처럼 5에서 올림 (2.5 -> 3, -2.5 -> -3. 파이썬·pandas의 짝수 반올림이 아님)."""
+    import numpy as np
+    x = values[0]
+    if fn == "abs":
+        return x.abs()
+    if fn == "round":
+        m = 10.0 ** (int(node[2][1][1]) if len(node[2]) == 2 else 0)
+        return np.sign(x) * np.floor(x.abs() * m + 0.5 + 1e-9) / m
     raise rt.InputError(f"'{fn}(' 함수는 쓸 수 없습니다.")
 
 
@@ -1852,9 +1865,49 @@ def op_rename(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]
     return df.rename(columns=names), out, {"warnings": []}
 
 
+PIVOT_COLS_MAX = 50              # pivot으로 펼치는 열 수 상한 (넘으면 멈춤: 열이 수백 개인 표는 읽을 수 없음)
+
+
+def op_pivot(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """--rows 값마다 한 행, --cols 값마다 한 열, 칸은 값 옵션(--sum 등, 없으면 행 수). 짝이 없는 칸은 빈 값(행 수·개수는 0).
+    행과 열은 표에 먼저 나온 순서."""
+    pd = pd_mod()
+    df, meta = inputs["from"]
+    rows_by, col_by, how, val = args["rows"], args["cols"], args.get("how"), args.get("value")
+    text = {c: _as_text(df[c]).where(_filled(df[c]), EMPTY_SHOWN) for c in rows_by + [col_by]}
+    keys = pd.DataFrame(text, index=df.index)
+    heads = list(dict.fromkeys(keys[col_by].tolist()))
+    if len(heads) > PIVOT_COLS_MAX:
+        raise rt.InputError(f"--cols '{col_by}'의 서로 다른 값이 {len(heads)}가지라 열이 너무 많습니다 (최대 {PIVOT_COLS_MAX}). "
+                            "값의 종류가 적은 열을 --cols에 쓰거나 group으로 묶으세요.")
+    clash = [h for h in heads if h in rows_by]
+    if clash:
+        raise rt.InputError(f"--cols '{col_by}'의 값 '{clash[0]}'이(가) --rows의 열 이름과 같아 펼칠 수 없습니다. 먼저 rename으로 그 열 이름을 바꾸세요.")
+    cells: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for key, g in df.groupby([keys[c] for c in rows_by + [col_by]], sort=False, dropna=False):
+        key = key if isinstance(key, tuple) else (key,)
+        cells.setdefault(tuple(key[:-1]), {})[key[-1]] = len(g) if not how else _agg(g[val], how)
+    counting = not how or how in ("count", "nunique")
+    out_rows = [dict(zip(rows_by, rk), **{h: got.get(h, 0 if counting else None) for h in heads}) for rk, got in cells.items()]
+    out = pd.DataFrame(out_rows, columns=rows_by + heads)
+    for h in heads:
+        out[h] = pd.to_numeric(out[h]).astype("Int64") if counting else _agg_column(out[h], df[val], how)
+    warnings: List[str] = []
+    unit = next((c for c in data_cols(df) if re.sub(r"[\s/._-]+", "", str(c)).lower() in UNIT_NAMES), None)
+    if how in NUMBER_AGGS and unit and unit not in rows_by + [col_by]:
+        per = df.assign(**{unit: df[unit].astype("string").str.strip()}).groupby(
+            [keys[c] for c in rows_by + [col_by]], dropna=False)[unit].nunique()
+        if (per > 1).any():
+            warnings.append(f"'{unit}' 열의 단위가 다른 행을 한 칸에 계산한 곳이 {int((per > 1).sum())}칸 있습니다. "
+                            f"단위별로 나누려면 --rows에 '{unit}'을(를) 더하세요: {rt.full_command(argv_setting('--rows', ','.join(rows_by + [unit])))}")
+    letters = {b: v for b, v in meta.get("letters", {}).items() if b in rows_by}
+    return out, {"letters": letters, "rows": {}, "kinds": {}}, {"warnings": warnings, "heads": len(heads)}
+
+
 OP_FUNCS = {"select": op_select, "join": op_join, "only": op_only, "stack": op_stack, "diff": op_diff,
             "group": op_group, "sort": op_sort, "describe": op_describe, "unique": op_unique, "calc": op_calc, "top": op_top,
-            "dropna": op_dropna, "fillna": op_fillna, "drop-duplicates": op_drop_duplicates, "rename": op_rename}
+            "dropna": op_dropna, "fillna": op_fillna, "drop-duplicates": op_drop_duplicates, "rename": op_rename,
+            "pivot": op_pivot}
 
 
 def run_op(op: str, args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
@@ -2297,6 +2350,33 @@ def cmd_rename(a: Any) -> Dict[str, Any]:
     return _one_table(
         a, "rename", lambda df, meta, src: {"columns": _rename_pairs(a, df, meta)},
         lambda name, src, args, info: f"{name} = {src}의 열 이름을 바꿈 (" + ", ".join(f"{o} -> {n}" for o, n in args["columns"]) + ")")
+
+
+def _pivot_args(a: Any, df: Any, meta: Dict[str, Any]) -> Dict[str, Any]:
+    rows = column_list(a.rows, df, meta, "--rows")
+    cols = column_list(a.cols, df, meta, "--cols")
+    if len(cols) != 1:
+        raise rt.InputError(f"--cols에는 열을 하나만 씁니다 (그 열의 값마다 열이 하나씩 생김). [추천] {rt.full_command(argv_setting('--cols', cols[0]))}")
+    if cols[0] in rows:
+        raise rt.InputError(f"'{cols[0]}' 열이 --rows와 --cols에 모두 있습니다. 서로 다른 열을 주세요.")
+    given = [(how, getattr(a, how)) for how, _label in AGGS if getattr(a, how, None)]
+    if len(given) > 1:
+        raise rt.InputError("pivot의 값 옵션은 하나만 씁니다 (" + ", ".join(f"--{h}" for h, _ in given) + " 중 하나). 여러 값을 보려면 group을 쓰세요.")
+    if not given:
+        return {"rows": rows, "cols": cols[0], "how": None, "value": None}
+    how, text = given[0]
+    vals = _numeric_cols_of(text, df, meta, f"--{how}") if how in NUMBER_AGGS else column_list(text, df, meta, f"--{how}")
+    if len(vals) != 1:
+        raise rt.InputError(f"pivot의 --{how}에는 열을 하나만 씁니다. [추천] {rt.full_command(argv_setting(f'--{how}', vals[0]))}")
+    return {"rows": rows, "cols": cols[0], "how": how, "value": vals[0]}
+
+
+def cmd_pivot(a: Any) -> Dict[str, Any]:
+    labels = dict(AGGS)
+    return _one_table(
+        a, "pivot", lambda df, meta, src: _pivot_args(a, df, meta),
+        lambda name, src, args, info: f"{name} = {src}을(를) {','.join(args['rows'])}(행) x {args['cols']}(열 {info['heads']}개)로 펼침 ("
+                                      + (f"{args['value']} {labels[args['how']]}" if args["how"] else "행 수") + ")")
 
 
 OFFICE_EXCEL = os.path.join(os.path.dirname(rt.TOOL_DIR), "office-cli", "excel.py")
@@ -2757,6 +2837,14 @@ def build_cli() -> rt.JsonArgumentParser:
     p.add_argument("--columns", required=True, help="\"지금 이름=새 이름\" (','로 나눔. 예: \"Qty=수량,UoM=단위\")")
     p.add_argument("--name", help="새 표 이름")
 
+    p = cmd("pivot", "행 열과 열 열로 펼친 표 (칸은 행 수나 합계·평균 등)")
+    p.add_argument("--from", dest="source", help="표 이름 (꼭 씀, 빼면 [후보]로 물음)")
+    p.add_argument("--rows", required=True, help="행이 될 열 (','로 나눔)")
+    p.add_argument("--cols", required=True, help="열이 될 열 하나 (그 열의 값마다 열이 하나씩)")
+    for how, label in AGGS:
+        p.add_argument(f"--{how}", help=f"칸에 넣을 값: 이 열의 {label} (값 옵션은 하나만, 생략하면 행 수)")
+    p.add_argument("--name", help="새 표 이름")
+
     cmd("undo", "마지막 단계 하나 되돌리기")
     rt.add_command(sub, root, "new", "새 작업 시작 (다음 select --file이 새 작업 폴더를 만듦)")
 
@@ -2780,7 +2868,8 @@ def build_cli() -> rt.JsonArgumentParser:
 COMMANDS = {"select": cmd_select, "show": cmd_show, "join": cmd_join, "only": cmd_only, "diff": cmd_diff,
             "stack": cmd_stack, "undo": cmd_undo, "new": cmd_new, "export": cmd_export, "chart": cmd_chart,
             "group": cmd_group, "sort": cmd_sort, "describe": cmd_describe, "unique": cmd_unique, "calc": cmd_calc,
-            "top": cmd_top, "dropna": cmd_dropna, "fillna": cmd_fillna, "drop-duplicates": cmd_drop_duplicates, "rename": cmd_rename}
+            "top": cmd_top, "dropna": cmd_dropna, "fillna": cmd_fillna, "drop-duplicates": cmd_drop_duplicates, "rename": cmd_rename,
+            "pivot": cmd_pivot}
 
 
 def main(argv: Optional[List[str]] = None) -> None:

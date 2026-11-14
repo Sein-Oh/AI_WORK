@@ -389,6 +389,7 @@ SAME_MEANING: Dict[str, List[str]] = {
     "--base": ["--old"], "--before": ["--old"], "--after": ["--new"],
     "--first": ["--left"], "--second": ["--right"],
     "--expression": ["--expr"], "--formula": ["--expr"], "--subset": ["--columns"], "--ffill": ["--down"],
+    "--index": ["--rows"], "--row": ["--rows"],
     "--ascending": ["--asc"], "--descending": ["--desc"], "--avg": ["--mean"], "--average": ["--mean"],
     "-f": ["--file"], "-o": ["--save"], "-w": ["--where"], "-n": ["--name"],
 }
