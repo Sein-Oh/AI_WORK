@@ -4,14 +4,14 @@ description: MBOM(제조 BOM) 엑셀 두 판에서 무엇이 바뀌었는지 찾
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "0.1.1"
+  version: "0.2.0"
   platform: windows
 ---
 
 # mbom-diff 스킬 (MBOM 두 판의 변경 찾기)
 
 명령 하나로 끝난다 (읽기·경로 계산·비교·요약을 도구가 차례로 함). 결과 처리는 전역 지침 4장, 승인은 5장을 따른다.
-한 판에서 품목이 쓰인 곳을 찾는 일은 이 스킬이 아니라 where-used다.
+한 판에서 품목이 쓰인 곳을 찾는 일은 where-used, 지난 비교들을 모은 변경 이력은 bom-history다.
 
 ## 명령
 PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄을 붙인다. `<...>`만 바꾼다. 1번만 실행한다.
@@ -33,4 +33,5 @@ PowerShell에서는 명령 앞에 전역 지침의 인코딩 줄을 붙인다. `
 - `warnings`가 있으면 그대로 알린다 (표 위의 내용, 숨긴 행, 글자로 저장된 숫자 등).
 - 잘렸으면(`truncated: true`) 전체는 `output_file`(요약 .txt)에 있다고 알린다.
 - `[대체 후보]`가 있으면 대체가 맞는지 사용자에게 묻는다.
-- 원본 엑셀에 바뀐 칸을 칠해 달라고 하면 결과의 `confirm_commands`를 1번 실행한다 (사용자가 원할 때만).
+- 원본 엑셀에 바뀐 칸을 칠해 달라고 하면 되묻지 말고 결과의 `confirm_commands`를 하나씩 1번 실행한다 (칠해 달라고 하지 않았으면 실행하지 않는다).
+  그 대화의 앞 결과에 있던 `confirm_commands`도 그대로 쓴다 (칠할 칸 파일은 결과 폴더에 남아 있다).

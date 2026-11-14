@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-VERSION = "0.2.9"
+VERSION = "0.2.10"
 TOOL_NAME = "pandas-kit"
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_ENV = "PANDAS_KIT_DATA_DIR"
@@ -490,7 +490,8 @@ class JsonArgumentParser(argparse.ArgumentParser):
             hint, items = "", []
         payload: Dict[str, Any] = {
             "status": "error", "tool": TOOL_NAME, "error_type": "input",
-            "message": f"CLI 인자 오류: {message}.{hint}",
+            "message": (f"CLI 인자 오류:{hint}" if " 명령은 없습니다." in hint   # 틀린 명령 이름: argparse 영어 문장은 빼고 한국어만
+                        else f"CLI 인자 오류: {message}.{hint}"),
             "agent_directive": ("STOP_RETRY: 명령 인자가 잘못되었습니다. message에 [추천]이 있으면 [추천] 뒤의 명령을 그대로 1번만 "
                                 "실행하세요. [후보]가 있으면 후보를 사용자에게 보여 주고 고른 번호의 confirm_commands를 1번 실행하세요. "
                                 "둘 다 없으면 다시 실행하지 말고 message를 그대로 알리세요 (옵션 이름은 SKILL.md 기준)."),

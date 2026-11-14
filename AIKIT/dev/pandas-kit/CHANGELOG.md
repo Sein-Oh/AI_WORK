@@ -2,6 +2,32 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
 
+## [0.2.10] - 2026-11-14
+
+### 수정 (집 PC 실기 2026-11-14, `docs/test_logs/집PC_bom_20261114/결과.md`)
+- `--file`·`--from` 없이 `--where`(또는 `--columns`)만 준 `select`: 마지막에 만든 표를 `[추천]`하던 것 (P7: 마지막 표가 0행 `df4`라
+  그대로 실행하면 0건). 표가 여럿이면 짐작하지 않고 표마다 `[후보]`(`표 df1(110행)에서 고르기`, 최근 6개)와 열린 통합문서를 함께 묻는다.
+  모두 합쳐 하나일 때만 `[추천]`. 단계 기록(`steps.json`)에 표의 행 수(`rows`)를 남김.
+- 같은 작업 폴더에 두 명령을 동시에 실행하면 한쪽 단계가 기록에서 사라지고, 기록과 스냅샷이 뒤바뀐 표를 `VERIFIED`로 보여 주던 것
+  (Fable 검토 2026-11-14 A1, 재현함): 기록을 고치는 `add`·`undo`를 작업 폴더의 잠금 파일(`.lock`, 20초 기다림, 2분 지난 잠금은 버림)로
+  한 실행씩 하고, 잠근 뒤 기록을 다시 읽어 단계 번호를 정한다. 스냅샷에 단계 표시(번호·이름·계보·시각)를 넣어 기록과 다르면 버리고
+  기록으로 다시 만든다(`recovered`). `VERIFIED`는 저장한 기록을 다시 읽어 그 단계가 있을 때만. 시험 `test_two_runs_at_once_keep_both_steps_and_the_right_snapshots`,
+  `test_a_snapshot_that_does_not_match_the_record_is_rebuilt`.
+- `--name`이 다른 원본의 표를 가리게 되면 늘 경고 (Fable 검토 2026-11-14 A3, 사용자 결정): 전에는 그 이름으로 만든 표가 있을 때만
+  "옛 df1 기준" 경고가 나와, 새 대화에서 다른 파일을 `--name df1`로 읽으면 어제 df1이 조용히 바뀌었다. 시험 `test_a_name_that_now_points_to_another_file_is_warned`.
+- 원본이 바뀌었다는 경고를 쓰는 표의 원본만, 값이 다를 때만 (Fable 검토 A4, 사용자 결정): 전에는 작업 안의 모든 원본을 매번 확인해
+  diff 뒤 원본에 칠하면(저장됨) 그 뒤 명령마다 "다시 읽으려면: python ..." 경고가 붙었다. 이제 그 명령이 읽는 표의 조상 원본만 보고,
+  바뀌었으면 다시 읽어 값이 같으면 기록만 조용히 갱신(stderr `[INFO]`), 다르면 "(값이 다름)" 경고와 다시 읽는 전체 명령.
+  시험 `test_source_saved_with_only_formatting_is_quiet_and_only_used_tables_are_checked`.
+- `--from`을 빼면 마지막 표(지금 표)를 쓰던 것을 없앰 (사용자 결정 2026-11-14: 짐작을 엄격하게 막고 늘 `--from` 또는 `--file`을 쓰게 함).
+  `show`·`group`·`sort`·`chart`·`export`에서 `--from`이 빠지면 `STOP_RETRY:`로 멈추고, 표가 하나면 `[추천]`, 여럿이면 `[후보]`(최근 6개, 행 수).
+  `undo` 결과에서 `current`(지금 표)를 빼고(남은 표는 원래 있던 `tables`), preview는 "남은 표: df1, df2". 스킬 문장도 "늘 `--from <표 이름>`을 쓴다"로. 시험 `test_from_is_always_needed_and_never_guessed`.
+- `select --file`의 결과에 `hidden_rows`(읽은 숨긴 행의 엑셀 행, 있을 때만): bom-kit이 결과에 든 숨긴 행을 알릴 때 씀.
+- 표 위 내용이 한 행이면 `엑셀 행 1~1` 대신 `엑셀 행 1`.
+- 틀린 명령 이름의 message에서 argparse 영어 문장을 빼고 한국어만.
+- 시험: `test_select_without_file_or_from_stops_and_gives_full_commands`, `test_hidden_rows_merged_cells_and_uncomputed_formulas_are_warned`,
+  `test_title_block_above_is_not_taken_as_the_table`, `test_misspelt_command_name_gives_candidates` (모두 고침).
+
 ## [0.2.9] - 2026-11-14
 
 ### 수정 (저장소 점검에서 직접 써 보며)

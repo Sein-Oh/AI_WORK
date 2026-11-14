@@ -27,6 +27,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -38,9 +40,11 @@ PART_NAMES = ("part number", "part no", "partnumber", "item", "품번", "자재�
 QTY_NAMES = ("qty", "quantity", "qpa", "수량", "소요량")
 DESC_NAMES = ("description", "desc", "품명", "품목명", "내역", "규격")
 UOM_NAMES = ("uom", "unit", "단위")
+KEY_SEP, KEY_NUM = " >> ", " ##"     # 짝 맞추는 경로 키: 품번에 '/'·'#'이 있어도 겹치지 않게 (화면용 경로는 '/'와 '#순번')
 LINE_MAX = 30                         # JSON lines·preview에 넣는 줄 수 (넘으면 truncated + output_file)
 MARKER = ".created_by_pandas-kit"      # pandas-kit이 만든 작업 폴더의 표시 파일 (이것이 있는 폴더만 지움)
-WORKS_MAX = 200                       # works.json에 기억하는 실행 수
+RESULT_MARKER = ".created_by_bom-kit"  # 결과 폴더(<원본 이름>_bom)의 표시 파일
+WORKS_MAX = 200                       # works.json에 기억하는 못 지운 폴더 수
 PANDAS_KIT = os.path.join(os.path.dirname(rt.TOOL_DIR), "pandas-kit", "pandas_kit.py")   # C:\AIKIT\pandas-kit
 
 
@@ -90,8 +94,14 @@ def find_col(cols: List[str], names: Tuple[str, ...], given: Optional[str], what
 
 
 def level_of(v: Any) -> Optional[int]:
+    """Level 칸 -> 깊이. 숫자(0, 1, 2.0), 점 표기(.1, ..2 -> 뒤의 숫자, 숫자 없이 점만 '..' -> 점 수).
+    'inf', 'nan' 글자와 음수·소수는 Level이 아님 (Fable 검토 2026-11-14: 점 표기를 모두 버리고 '두 판이 같습니다'였음)."""
+    t = str(v if v is not None else "").strip()
+    dots = re.fullmatch(r"(\.+)(\d+)?", t)
+    if dots:
+        return int(dots.group(2)) if dots.group(2) else len(dots.group(1))
     try:
-        f = float(str(v).strip())
+        f = float(t)
     except ValueError:
         return None
     return int(f) if math.isfinite(f) and f == int(f) and f >= 0 else None      # "inf", "nan" 글자는 Level이 아님
@@ -103,6 +113,14 @@ def qty_of(v: Any) -> Optional[float]:
     except (ValueError, AttributeError):
         return None
     return f if math.isfinite(f) else None
+
+
+def _int(v: Any) -> Optional[int]:
+    """csv의 엑셀 행 번호 ('9', '9.0') -> 9."""
+    try:
+        return int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return None
 
 
 def number(v: float) -> str:
@@ -133,7 +151,7 @@ def tree(rows: List[Dict[str, str]], lcol: str, pcol: str, qcol: Optional[str] =
             jumps.append(r.get(ROW) or "?")
         parent, above = (stack[-1][1], stack[-1][2]) if stack else ((), 1.0)
         n = count[(parent, pn)] = count.get((parent, pn), 0) + 1
-        parts = parent + (f"{pn}#{n}",)
+        parts = parent + (f"{pn}{KEY_NUM}{n}",)
         q = qty_of(r.get(qcol)) if qcol else None
         if qcol and q is None:
             noqty.append(r.get(ROW) or "?")
@@ -141,11 +159,15 @@ def tree(rows: List[Dict[str, str]], lcol: str, pcol: str, qcol: Optional[str] =
         stack.append((lv, parts, total))
         raw.append((r, lv, parts, q, total))
 
-    def shown(parts: Tuple[str, ...]) -> str:       # 같은 상위 아래 한 번만 나오는 품번은 #1을 뗌
-        return "/".join(p if count[(parts[:i], p.rpartition("#")[0])] > 1 else p.rpartition("#")[0]
-                        for i, p in enumerate(parts))
-    items = [{"r": r, "level": lv, "parent": parts[-2].rpartition("#")[0] if len(parts) > 1 else "",
-              "path": shown(parts), "qty": q, "total": total} for r, lv, parts, q, total in raw]
+    def shown(parts: Tuple[str, ...]) -> str:       # 화면용: 같은 상위 아래 한 번만 나오는 품번은 #1을 뗌
+        out = []
+        for i, p in enumerate(parts):
+            pn, _, n = p.rpartition(KEY_NUM)
+            out.append(f"{pn}#{n}" if count[(parts[:i], pn)] > 1 else pn)
+        return "/".join(out)
+    # 짝 맞추는 키는 늘 #순번 (Fable 검토 2026-11-14: 같은 상위 아래 둘이던 품번이 하나가 되면 #1을 떼어 짝이 어긋났음)
+    items = [{"r": r, "level": lv, "parent": parts[-2].rpartition(KEY_NUM)[0] if len(parts) > 1 else "",
+              "path": shown(parts), "key": KEY_SEP.join(parts), "qty": q, "total": total} for r, lv, parts, q, total in raw]
     return {"items": items, "bad": bad, "jumps": jumps, "noqty": noqty}
 
 
@@ -162,14 +184,17 @@ def tree_warnings(t: Dict[str, Any], who: str = "") -> List[str]:
     return out
 
 
-def split(path: str) -> Tuple[str, str]:
-    """'A/B#2/C' -> ('A/B#2', 'C')."""
-    parent, _, last = path.rpartition("/")
-    return parent, last.partition("#")[0]
+def split(key: str) -> Tuple[str, str]:
+    """경로 키 -> (상위의 경로 키, 품번)."""
+    parent, _, last = key.rpartition(KEY_SEP)
+    return parent, last.rpartition(KEY_NUM)[0]
+
+
+SHOWN: Dict[str, str] = {}                 # 경로 키 -> 화면용 경로 (두 판의 _paths가 채움)
 
 
 def where(parent: str) -> str:
-    return f"{parent} 아래" if parent else "최상위"
+    return f"{SHOWN.get(parent, parent)} 아래" if parent else "최상위"
 
 
 def write_csv(path: str, head: List[str], body: List[List[Any]], what: str) -> Tuple[str, bool]:
@@ -201,8 +226,13 @@ class PandasKit:
     def __init__(self) -> None:
         if not os.path.isfile(PANDAS_KIT):
             raise rt.InputError(f"pandas-kit이 없습니다: {PANDAS_KIT} (C:\\AIKIT\\pandas-kit 폴더를 함께 두세요).")
-        self.env = dict(os.environ, PANDAS_KIT_DATA_DIR=os.path.join(rt.get_data_dir(), "pandas-kit"),
-                        PANDAS_KIT_SHELL=rt.command_shell(), PYTHONIOENCODING="utf-8")
+        # 실행마다 pandas-kit 데이터 폴더를 따로 (Fable 검토 2026-11-14 A2: 두 실행이 지금 작업 포인터 하나를 같이 써
+        # 둘 다 멈췄음). 사용자의 pandas-kit 작업도, 다른 bom-kit 실행도 건드리지 않는다. 오류 로그는 끝에 공용 로그로 옮김.
+        self.base = os.path.join(rt.get_data_dir(), "pandas-kit")
+        _drop_old_runs(os.path.join(self.base, "runs"))
+        self.data = os.path.join(self.base, "runs", f"{os.getpid()}_{int(time.time() * 1000)}")
+        os.makedirs(self.data, exist_ok=True)
+        self.env = dict(os.environ, PANDAS_KIT_DATA_DIR=self.data, PANDAS_KIT_SHELL=rt.command_shell(), PYTHONIOENCODING="utf-8")
         self.warnings: List[str] = []
         self.work: Optional[str] = None
 
@@ -225,32 +255,76 @@ class PandasKit:
                 self.warnings.append(f"{who}: {w}" if who else w)
         return out
 
-    # --- 작업 폴더 정리: 원본 옆에 폴더가 쌓이지 않게 (0.1.1) -------------------------------------------------
+    # --- 작업 폴더(캐시) 정리: 결과는 결과 폴더에 두고 pandas-kit 작업 폴더는 실행마다 지움 (0.1.2) ----------------
     def current(self) -> Optional[str]:
-        """bom-kit 몫의 pandas-kit이 지금 쓰는 작업 폴더 (멈춘 실행이 만든 폴더를 찾을 때)."""
+        """이 실행의 pandas-kit이 만든 작업 폴더 (멈춘 실행이 만든 폴더도)."""
         try:
-            with open(os.path.join(self.env["PANDAS_KIT_DATA_DIR"], "current.json"), encoding="utf-8") as f:
+            with open(os.path.join(self.data, "current.json"), encoding="utf-8") as f:
                 return json.load(f).get("work") or None
         except (OSError, ValueError):
-            return None
+            return self.work
+
+    def close(self) -> None:
+        """작업 폴더와 이 실행의 데이터 폴더 지우기. pandas-kit 오류 로그는 공용 로그(<bom-kit 데이터>/pandas-kit/logs)에 덧붙임."""
+        cur = self.current()
+        if cur and not self.drop(cur, "작업 폴더(캐시)"):
+            _remember_pending(cur)
+        log = os.path.join(self.data, "logs", "errors.txt")
+        try:
+            if os.path.isfile(log):
+                os.makedirs(os.path.join(self.base, "logs"), exist_ok=True)
+                with open(log, encoding="utf-8", errors="replace") as f,                         open(os.path.join(self.base, "logs", "errors.txt"), "a", encoding="utf-8") as g:
+                    g.write(f.read())
+        except OSError:
+            pass
+        shutil.rmtree(self.data, ignore_errors=True)
 
     @staticmethod
-    def drop(folder: Optional[str], why: str) -> None:
-        """bom-kit이 만든 작업 폴더 지우기. pandas-kit 표시 파일이 있는 폴더만. 잡혀 있어 못 지우면 그대로 둠."""
-        if not folder or not os.path.isfile(os.path.join(folder, MARKER)):
-            return
+    def drop(folder: Optional[str], why: str, marked: bool = True) -> bool:
+        """bom-kit이 만든 작업 폴더 지우기 -> 다 지웠거나 없으면 True, 못 지워 그대로 두면 False.
+        marked: pandas-kit 표시 파일이 있는 폴더만 (표시 파일을 보고 기억해 둔 폴더를 다시 지울 때는 False).
+        안의 파일이 열려 있으면 반쯤 지우지 않게 먼저 폴더 이름을 바꿔 본다 (Windows: 열린 파일이 든 폴더는 이름을 못 바꿈,
+        집 PC 2026-11-14 B9: rmtree가 표시 파일부터 지우고 열린 csv에서 멈춰 다시는 못 지우는 폴더가 남았음)."""
+        if not folder or not os.path.isdir(folder):
+            return True
+        if marked and not os.path.isfile(os.path.join(folder, MARKER)):
+            return True                                  # 우리가 만든 폴더가 아님: 손대지 않고 잊음
+        gone = folder.rstrip("\\/") + ".지우는중"
+        n = 2
+        while os.path.exists(gone):                      # 앞에서 다 못 지운 같은 이름이 있으면 번호
+            gone, n = folder.rstrip("\\/") + f".지우는중{n}", n + 1
         try:
-            rt.retry_fs(lambda: shutil.rmtree(folder), attempts=3)
-            sys.stderr.write(f"[INFO] {why}: 작업 폴더를 지웠습니다 ({folder})\n")
+            rt.retry_fs(lambda: os.rename(folder, gone), attempts=3)
         except OSError as e:
-            sys.stderr.write(f"[WARN] {why}: 작업 폴더를 지우지 못해 그대로 둡니다 ({folder}, {type(e).__name__})\n")
+            sys.stderr.write(f"[WARN] {why}: 작업 폴더 안의 파일이 열려 있어 그대로 둡니다. 다음 실행 때 다시 지웁니다 "
+                             f"({folder}, {type(e).__name__})\n")
+            return False
+        try:
+            rt.retry_fs(lambda: shutil.rmtree(gone), attempts=3)
+        except OSError as e:                             # 이름은 바뀌었는데 못 지움 (드묾): 바뀐 이름을 기억해 다음에 다시
+            sys.stderr.write(f"[WARN] {why}: 작업 폴더를 다 지우지 못했습니다. 다음 실행 때 다시 지웁니다 ({gone}, {type(e).__name__})\n")
+            _remember_pending(gone)
+            return True
+        sys.stderr.write(f"[INFO] {why}: 작업 폴더를 지웠습니다 ({folder})\n")
+        return True
+
+
+def _drop_old_runs(runs: str) -> None:
+    """끝나지 못한(중단된) 실행의 데이터 폴더 중 하루 지난 것은 지움."""
+    try:
+        for n in os.listdir(runs):
+            p = os.path.join(runs, n)
+            if time.time() - os.path.getmtime(p) > 86400:
+                shutil.rmtree(p, ignore_errors=True)
+    except OSError:
+        pass
 
 
 def _works_path() -> str:
     return os.path.join(rt.get_data_dir(), "works.json")
 
 
-def _works() -> Dict[str, str]:
+def _works() -> Dict[str, Any]:
     try:
         with open(_works_path(), encoding="utf-8") as f:
             data = json.load(f)
@@ -259,41 +333,86 @@ def _works() -> Dict[str, str]:
         return {}
 
 
-def _remember(key: str, folder: str) -> None:
-    data = _works()
-    data.pop(key, None)
-    data[key] = folder
-    for k in list(data)[:-WORKS_MAX]:
-        del data[k]
+PENDING = "_못 지운 폴더"                # works.json에서 다음 실행 때 다시 지울 폴더 목록의 키
+
+
+def _save_works(data: Dict[str, Any]) -> None:
     try:
         os.makedirs(rt.get_data_dir(), exist_ok=True)
         text = json.dumps(data, ensure_ascii=False)
-        rt.retry_fs(lambda: open(_works_path(), "w", encoding="utf-8").write(text))
+        tmp = _works_path() + f".{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        rt.retry_fs(lambda: os.replace(tmp, _works_path()))
     except OSError:
         pass                                   # 기억하지 못해도 결과는 그대로 (다음에 폴더 하나가 더 남을 뿐)
 
 
-def _file_key(path: Optional[str]) -> str:
-    return os.path.normcase(os.path.abspath(str(path))) if path else ""
+def _remember_pending(folder: str) -> None:
+    data = _works()
+    pend = [p for p in data.get(PENDING) or [] if isinstance(p, str)]
+    if folder not in pend:
+        pend.append(folder)
+    data[PENDING] = pend[-WORKS_MAX:]
+    _save_works(data)
 
 
-def run_once(key_parts: List[Any], body: Any) -> Dict[str, Any]:
-    """작업 하나: 멈춘 실행이 만든 빈 작업 폴더는 지우고, 같은 명령(같은 파일·시트·범위·열·찾는 말)을 다시 실행했으면
-    앞 실행의 작업 폴더를 지움 (새 결과가 같은 내용이라 폴더만 쌓임). 다른 파일·다른 --find의 결과 폴더는 그대로 둠."""
-    key = json.dumps([str(x or "") for x in key_parts], ensure_ascii=False)
+def _retry_pending() -> None:
+    """앞 실행에서 열려 있어 못 지운 폴더를 다시 지움 (아직 열려 있으면 그대로 기억)."""
+    data = _works()
+    pend = [p for p in data.get(PENDING) or [] if isinstance(p, str)]
+    if not pend:
+        return
+    left = [p for p in pend if not PandasKit.drop(p, "앞 실행에서 못 지운 폴더", marked=False)]
+    data = _works()                            # drop이 바꾼 이름(.지우는중)을 더했을 수 있음
+    data[PENDING] = left + [p for p in data.get(PENDING) or [] if p not in pend and p not in left]
+    if not data[PENDING]:
+        del data[PENDING]
+    _save_works(data)
+
+
+def result_dir(original: str) -> str:
+    """결과 폴더: 원본 옆 <원본 이름>_bom (사용자 결정 2026-11-14). 같은 이름의 다른 폴더(표시 파일 없음)가 있으면 _bom2, _bom3."""
+    stem = os.path.splitext(os.path.abspath(original))[0]
+    n = 1
+    while True:
+        folder = stem + ("_bom" if n == 1 else f"_bom{n}")
+        if not os.path.exists(folder):
+            rt.retry_fs(lambda: os.makedirs(folder, exist_ok=True))
+            with open(os.path.join(folder, RESULT_MARKER), "w", encoding="utf-8") as f:
+                f.write("bom-kit 결과 폴더 (실행마다 시각을 붙인 새 파일, 덮어쓰지 않음)\n")
+            return folder
+        if os.path.isfile(os.path.join(folder, RESULT_MARKER)):
+            return folder
+        n += 1
+
+
+def stamped(folder: str, base: str) -> str:
+    """결과 파일 이름 앞부분: <base>_<YYYYMMDD_HHMMSS> (사용자 결정 2026-11-14: 결과 파일은 덮어쓰지 않고 실행마다 새 이름, R4).
+    같은 초에 같은 이름이 있으면 _2, _3."""
+    head = f"{base}_{datetime.now():%Y%m%d_%H%M%S}"
+    name, n = head, 2
+    while any(f.startswith(name + "_") or f.startswith(name + ".") for f in os.listdir(folder)):
+        name, n = f"{head}_{n}", n + 1
+    return os.path.join(folder, name)
+
+
+def file_part(text: str, limit: int = 40) -> str:
+    """파일 이름에 넣을 말 (찾는 말, 새 판 이름): 파일 이름에 못 쓰는 글자는 _."""
+    t = re.sub(r'[\\/:*?"<>|\s]+', "_", str(text).strip()).strip("._")
+    return (t or "_")[:limit]
+
+
+def run_once(body: Any) -> Dict[str, Any]:
+    """작업 하나 (0.1.2, 사용자 결정 2026-11-14). 결과 파일은 원본 옆 결과 폴더(<원본 이름>_bom)에 실행마다 시각을 붙인 새 이름으로
+    둔다 (덮어쓰지 않음: 알려 준 output_file이 사라지지 않고 diff 결과가 쌓임),
+    pandas-kit 작업 폴더는 캐시라 실행 끝(멈춘 실행 포함)에 지운다. 안의 파일이 열려 있어 못 지운 폴더는 기억했다가 다음 실행 때 다시."""
+    _retry_pending()
     pk = PandasKit()
-    pk.run(["new"])
     try:
-        out = body(pk)
-    except (rt.InputError, FileNotFoundError):
-        pk.drop(pk.current(), "멈춘 실행")
-        raise
-    before = _works().get(key)
-    if before and out.get("work") and _file_key(before) != _file_key(out["work"]):
-        pk.drop(before, "같은 명령의 앞 실행")
-    if out.get("work"):
-        _remember(key, out["work"])
-    return out
+        return body(pk)
+    finally:
+        pk.close()
 
 
 def _plain_warning(text: str) -> str:
@@ -339,7 +458,8 @@ def _pk_error(out: Dict[str, Any], who: str) -> Exception:
             return err
     # 그 밖의 실패(파일 없음, 저장 안 된 문서 등)는 그대로 알림 (pandas-kit 명령은 주지 않음: 이어서 할 일은 bom.py 하나)
     text = re.sub(r" ?\[(추천|후보)\].*$", "", msg)
-    return rt.InputError(pre + text)
+    keep = [t for t in re.split(r"(?<=[.)])\s+", text.strip()) if t and "python " not in t and "pandas_kit" not in t]
+    return rt.InputError(pre + (" ".join(keep) or text))     # pandas-kit 명령을 권하는 문장은 뺌 (Fable 검토 D2)
 
 
 def _table_name(path: str) -> str:
@@ -347,12 +467,12 @@ def _table_name(path: str) -> str:
     return re.sub(r"_\d{8}_\d{6}$", "", os.path.splitext(os.path.basename(path))[0])
 
 
-def read_bom(pk: PandasKit, file: str, name: str, who: str, sheet: Optional[str], rng: Optional[str]) -> Tuple[str, str]:
-    """pandas-kit으로 BOM 읽기 -> export csv. (csv 경로, 읽은 범위 preview)."""
+def read_bom(pk: PandasKit, file: str, name: str, who: str, sheet: Optional[str], rng: Optional[str]) -> Tuple[str, str, List[int]]:
+    """pandas-kit으로 BOM 읽기 -> export csv. (csv 경로, 읽은 범위 preview, 읽은 숨긴 행의 엑셀 행)."""
     args = ["select", "--file", file, "--name", name] + (["--sheet", sheet] if sheet else []) + (["--range", rng] if rng else [])
     got = pk.run(args, who, shell="bash")                      # [후보] 명령을 나눠 읽으려고 bash 따옴표 (_pk_error)
     out = pk.run(["export", "--from", name, "--save", f"{name}.csv"], who)
-    return out["output_file"], got.get("preview", "")
+    return out["output_file"], got.get("preview", ""), [int(r) for r in got.get("hidden_rows") or []]
 
 
 # ==============================================================================
@@ -363,10 +483,10 @@ def _paths(csv_path: str, level: Optional[str], part: Optional[str], who: str) -
     path, rows, cols = load_csv(csv_path)
     t = tree(rows, find_col(cols, LEVEL_NAMES, level, "Level", "--level"), find_col(cols, PART_NAMES, part, "품번", "--part"))
     save, ok_ = write_csv(os.path.splitext(path)[0] + "_경로.csv", [ROW, "상위 품번", "경로"],
-                          [[i["r"].get(ROW), i["parent"], i["path"]] for i in t["items"]], "경로 파일")
-    multi = sorted({i["path"].rpartition("/")[2] for i in t["items"] if "#" in i["path"].rpartition("/")[2]})
-    return {"table": _table_name(path), "save": save, "n": len(t["items"]), "ok": ok_, "multi": multi,
-            "warnings": tree_warnings(t, who)}
+                          [[i["r"].get(ROW), i["parent"], i["key"]] for i in t["items"]], "경로 파일")
+    SHOWN.update({i["key"]: i["path"] for i in t["items"]})
+    return {"table": _table_name(path), "save": save, "n": len(t["items"]), "ok": ok_, "bad": len(t["bad"]),
+            "rows": len(rows), "cols": cols, "data": rows, "warnings": tree_warnings(t, who)}
 
 
 def _num(v: Any) -> str:
@@ -435,33 +555,106 @@ def summarize(rows: List[Dict[str, str]], ocol: str, ncol: str, order: Optional[
 
 
 def cmd_diff(a: Any) -> Dict[str, Any]:
-    return run_once(["diff", _file_key(a.old), _file_key(a.new), a.sheet, a.old_sheet, a.new_sheet, a.old_range, a.new_range,
-                     a.level, a.part], lambda pk: _diff(a, pk))
+    return run_once(lambda pk: _diff(a, pk))
+
+
+def _keep(src: str, dst: str, what: str) -> str:
+    """작업 폴더(캐시)의 결과 파일을 결과 폴더로 (이름은 stamped가 정한 새 이름)."""
+    with open(src, "rb") as f:
+        data = f.read()
+
+    def writer(p: str) -> None:
+        with open(p, "wb") as f:
+            f.write(data)
+    return rt.save_with_lock_fallback(dst, writer, what)
+
+
+CATEGORIES = (("Level", LEVEL_NAMES), ("품번", PART_NAMES), ("수량", QTY_NAMES), ("품명", DESC_NAMES), ("단위", UOM_NAMES))
+ONLY_COLS = "한쪽 표에만 있는 열은 비교하지 않았습니다: "
+
+
+def _paired_columns(ocols: List[str], ncols: List[str]) -> List[Tuple[str, str]]:
+    """한 판만 열 이름이 다른 같은 뜻의 열 (Qty / 수량): 같은 열로 보고 bom-kit이 직접 비교 (Fable 검토 2026-11-14:
+    pandas-kit diff가 '한쪽에만 있는 열'로 빼서 수량이 바뀌었는데 '두 판이 같습니다'였음)."""
+    out = []
+    for _what, names in CATEGORIES:
+        oc = next((c for c in ocols if c.strip().lower() in names and c not in ncols), None)
+        nc = next((c for c in ncols if c.strip().lower() in names and c not in ocols), None)
+        if oc and nc:
+            out.append((oc, nc))
+    return out
+
+
+def _paired_changes(o: Dict[str, Any], n: Dict[str, Any], pairs: List[Tuple[str, str]], gone: set) -> List[Dict[str, str]]:
+    """짝 지은 열의 바뀐 칸 -> 변경내용 행 모양 ({구분, 경로, 열, 옛 값, 새 값, oldp 행, newp 행})."""
+    def by_key(d: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+        row_of = {r[ROW]: r for r in d["data"]}
+        out = {}
+        for r in csv.DictReader(io.StringIO(rt.read_text_file(d["save"]))):
+            if r[ROW] in row_of:
+                out[r["경로"]] = row_of[r[ROW]]
+        return out
+    ok_, nk = by_key(o), by_key(n)
+    rows = []
+    for key in [k for k in ok_ if k in nk and k not in gone]:
+        for oc, nc in pairs:
+            a, b = _num(ok_[key].get(oc)), _num(nk[key].get(nc))
+            if a != b:
+                rows.append({"구분": "바뀜", "경로": key, "열": f"{oc}(새 판 {nc})", "옛 값": a, "새 값": b,
+                             "oldp 행": ok_[key].get(ROW, ""), "newp 행": nk[key].get(ROW, "")})
+    return rows
 
 
 def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
-    o_csv, o_read = read_bom(pk, a.old, "old", "옛 판", a.old_sheet or a.sheet, a.old_range)
-    n_csv, n_read = read_bom(pk, a.new, "new", "새 판", a.new_sheet or a.sheet, a.new_range)
+    o_csv, o_read, _ = read_bom(pk, a.old, "old", "옛 판", a.old_sheet or a.sheet, a.old_range)
+    n_csv, n_read, _ = read_bom(pk, a.new, "new", "새 판", a.new_sheet or a.sheet, a.new_range)
     o, n = _paths(o_csv, a.level, a.part, "옛 판"), _paths(n_csv, a.level, a.part, "새 판")
     for d in (o, n):
         pk.run(["select", "--file", d["save"], "--name", f"{d['table']}k"])
         pk.run(["join", "--left", d["table"], "--right", f"{d['table']}k", "--on", "엑셀 행=엑셀 행번호", "--name", f"{d['table']}p"])
     pk.warnings = [w for w in pk.warnings if "엑셀 행번호" not in w]      # 경로 표의 '엑셀 행' 이름 바꿈 안내는 bom-kit 안의 일
     diff = pk.run(["diff", "--old", "oldp", "--new", "newp", "--on", "경로", "--name", "chg"])
-    changes = pk.run(["export", "--from", "chg", "--save", "변경내용.csv"])["output_file"]
-    rows = list(csv.DictReader(io.StringIO(rt.read_text_file(changes))))
+    folder = result_dir(a.old)                            # 결과는 옛 판 옆 <옛 판 이름>_bom, 실행마다 시각을 붙인 새 이름
+    stem = stamped(folder, f"diff_{file_part(os.path.splitext(os.path.basename(a.new))[0])}")
+    raw = pk.run(["export", "--from", "chg", "--save", "변경내용.csv"])["output_file"]
+    rows = list(csv.DictReader(io.StringIO(rt.read_text_file(raw))))
+    head_cols = list(rows[0].keys()) if rows else ["구분", "경로", "열", "옛 값", "새 값", "oldp 행", "newp 행"]
+    # 한 판만 이름이 다른 같은 뜻의 열은 bom-kit이 비교, 남은 '한쪽에만 있는 열'은 비교하지 못한 것으로 알림
+    pairs = _paired_columns(o["cols"], n["cols"])
+    paired = {c for p in pairs for c in p}
+    limits: List[str] = []
+    for w in [w for w in pk.warnings if w.startswith(ONLY_COLS)]:
+        pk.warnings.remove(w)
+        left = [c.strip() for c in w[len(ONLY_COLS):].split(",") if c.strip() and c.strip() not in paired]
+        if left:
+            limits.append(f"한쪽 판에만 있는 열 {', '.join(left)}은(는) 비교하지 않았습니다")
+    if pairs:
+        gone = {r["경로"] for r in rows if r["구분"] in ("추가", "삭제")}
+        rows += _paired_changes(o, n, pairs, gone)
+        pk.warnings.append("열 이름이 다른 같은 뜻의 열을 짝지어 비교했습니다: " + ", ".join(f"옛 판 {x} = 새 판 {y}" for x, y in pairs)
+                           + " (이 열의 바뀐 칸은 칠할 칸 목록에 없음).")
+    for d, who in ((o, "옛 판"), (n, "새 판")):
+        if d["bad"]:
+            limits.append(f"{who} {d['rows']}행 중 {d['bad']}행은 Level·품번을 읽지 못해 비교하지 않았습니다")
+    # 변경내용 파일은 화면용 경로로 (짝 맞추는 키는 도구 안의 일)
+    shown_rows = [dict(r, 경로=SHOWN.get(r["경로"], r["경로"])) for r in rows]
+    changes, _ok = write_csv(stem + "_변경내용.csv", head_cols, [[r.get(c, "") for c in head_cols] for r in shown_rows], "변경내용 파일")
     order = [_siblings(o["save"]), _siblings(n["save"])]
     lines, counts, nrows = summarize(rows, "oldp 행", "newp 행", order) if rows else ([], {}, 0)
     head = ("두 판이 같습니다 (찾은 변경 없음)." if not lines else
             "변경 " + ", ".join(f"{k} {v}" + ("곳" if k == "바뀐 칸" else "건") for k, v in counts.items() if v)
             + (f" ({nrows}개 품목)" if counts.get("바뀐 칸") else "") + ".")
+    if limits:                                            # 비교하지 못한 것은 첫 줄에 (warnings는 뒤에 있어 빠뜨리기 쉬움)
+        head = "주의: " + "; ".join(limits) + ". 아래 결과는 그것을 뺀 비교입니다.\n" + head
     text = "\n".join([head] + lines) + "\n"
 
     def writer(p: str) -> None:
         with open(p, "w", encoding="utf-8-sig") as f:
             f.write(text)
-    save = rt.save_with_lock_fallback(os.path.splitext(changes)[0] + "_요약.txt", writer, "요약 파일")
-    verified = len(rt.read_text_file(save).splitlines()) == len(lines) + 1 and o["ok"] and n["ok"]
+    save = rt.save_with_lock_fallback(stem + "_요약.txt", writer, "요약 파일")
+    files_ok = len(rt.read_text_file(save).splitlines()) == len(text.splitlines()) and o["ok"] and n["ok"] and _ok
+    verified = files_ok and not limits
+    unverified = None if verified else (limits or ["저장한 요약·경로 파일을 확인하지 못함"])
     shown = lines[:LINE_MAX]
     read = f"읽은 표: 옛 판 {o_read.split(' = ', 1)[-1]}, 새 판 {n_read.split(' = ', 1)[-1]}."
     preview = "\n".join([head] + shown + ([f"(나머지 {len(lines) - len(shown)}줄은 {save})"] if len(lines) > len(shown) else [])
@@ -469,10 +662,17 @@ def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
     then = ("preview를 그대로 사용자에게 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요."
             + (" [대체 후보]는 도구의 짐작이니 맞는지 사용자에게 확인하세요." if counts.get("대체 후보") else "")
             + ("" if lines else " 0건. 찾은 변경이 없습니다."))
-    out = rt.ok("diff", preview, verified, then, None if verified else ["저장한 요약·경로 파일을 확인하지 못함"],
+    out = rt.ok("diff", preview, verified, then, unverified,
                 count=len(lines), counts=counts, lines=shown, truncated=len(lines) > len(shown), output_file=save,
-                changes_file=changes, work=pk.work)
+                changes_file=changes, result_folder=folder)
     paint = diff.get("confirm_commands") or []
+    for f in diff.get("paint_files") or []:              # 칠할 칸 목록도 결과 폴더로 (confirm_commands가 다음 턴에도 되게)
+        side = "옛판" if "_칠할칸_old_" in os.path.basename(f) else "새판"
+        kept = _keep(f, f"{stem}_칠할칸_{side}.csv", "칠할 칸 파일")
+        for c in paint:
+            c["command"] = c["command"].replace(rt.quote_arg(f), rt.quote_arg(kept))
+    kept_paint = [f"{stem}_칠할칸_{x}.csv" for x in ("옛판", "새판") if os.path.isfile(f"{stem}_칠할칸_{x}.csv")]
+    _write_record(stem, a, counts, head, save, changes, kept_paint, verified)     # history가 읽는 기록
     if paint:                                    # 원본에 바뀐 칸 칠하기 (office-cli, 사용자가 원할 때만)
         out["confirm_commands"] = paint
         out["agent_directive"] += " confirm_commands는 원본 엑셀에 바뀐 칸을 칠하는 명령입니다. 사용자가 칠해 달라고 할 때만 1번 실행하세요."
@@ -488,12 +688,11 @@ def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
 # ==============================================================================
 
 def cmd_where_used(a: Any) -> Dict[str, Any]:
-    return run_once(["where-used", _file_key(a.file), a.sheet, a.range, a.level, a.part, a.qty, a.find.strip().lower()],
-                    lambda pk: _where_used(a, pk))
+    return run_once(lambda pk: _where_used(a, pk))
 
 
 def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
-    bom_csv, read = read_bom(pk, a.file, "bom", "BOM", a.sheet, a.range)
+    bom_csv, read, hidden = read_bom(pk, a.file, "bom", "BOM", a.sheet, a.range)
     path, rows, cols = load_csv(bom_csv)
     pcol = find_col(cols, PART_NAMES, a.part, "품번", "--part")
     qcol = find_col(cols, QTY_NAMES, a.qty, "수량", "--qty")
@@ -507,17 +706,27 @@ def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
     name: Dict[str, str] = {}
     for i in hits:
         name.setdefault(str(i["r"].get(pcol) or "").strip(), str(i["r"].get(dcol) or "").strip() if dcol else "")
-    save, ok_ = write_csv(os.path.splitext(path)[0] + "_쓰인곳.csv",
+    folder = result_dir(a.file)
+    save, ok_ = write_csv(stamped(folder, f"쓰인곳_{file_part(a.find)}") + ".csv",
                           [ROW, "품번", "품명", "상위 품번", "경로", "그 자리 수량", "제품 1대당 수량", "단위"],
                           [[i["r"].get(ROW), i["r"].get(pcol), i["r"].get(dcol) if dcol else "", i["parent"], i["path"],
                             "" if i["qty"] is None else number(i["qty"]), "" if i["total"] is None else number(i["total"]),
                             i["r"].get(ucol) if ucol else ""] for i in hits], "쓰인 곳 파일")
     warnings = pk.warnings + tree_warnings(t)
-    unverified = None if ok_ else ["저장한 쓰인 곳 파일의 행 수를 확인하지 못함"]
+    hid = [i for i in hits if _int(i["r"].get(ROW)) in set(hidden)]
+    if hid:                                      # 숨긴 폐기 품목이 '쓰인 곳'으로 세어지는 것 (집 PC 2026-11-14 B4)
+        warnings.append(f"찾은 곳 중 {len(hid)}곳은 숨긴 행(또는 자동 필터로 가려진 행)입니다 (엑셀 행 "
+                        f"{rows_text([i['r'].get(ROW) for i in hid])}, 품번 {', '.join(dict.fromkeys(str(i['r'].get(pcol) or '').strip() for i in hid))}). "
+                        "결과와 제품 1대당 수량에 넣었습니다.")
+    # 읽지 못한 행이 있으면 곳 수·합계가 모자랄 수 있음: 첫 줄에 알리고 UNVERIFIED (diff와 같은 규칙)
+    limit = f"주의: BOM {len(rows)}행 중 {len(t['bad'])}행은 Level·품번을 읽지 못해 찾지 않았습니다.\n" if t["bad"] else ""
+    unverified = ([limit.strip()[4:]] if limit else []) + ([] if ok_ else ["저장한 쓰인 곳 파일의 행 수를 확인하지 못함"])
+    ok_ = ok_ and not limit
+    unverified = unverified or None
     if not hits:
-        out = rt.ok("where-used", f"'{a.find}'을(를) 품번이나 품명에서 찾지 못했습니다 (BOM {len(items)}행, {read.split(' = ', 1)[-1]}).", ok_,
+        out = rt.ok("where-used", limit + f"'{a.find}'을(를) 품번이나 품명에서 찾지 못했습니다 (BOM {len(items)}행, {read.split(' = ', 1)[-1]}).", ok_,
                     "0건. 찾은 품목이 없습니다. preview를 그대로 알리고 다시 실행하지 마세요. 품번이나 품명의 일부를 --find에 주세요.",
-                    unverified, count=0, lines=[], output_file=save, work=pk.work)
+                    unverified, count=0, lines=[], output_file=save, result_folder=folder)
     else:
         parent_name: Dict[str, str] = {}
         if dcol:
@@ -538,12 +747,13 @@ def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
         sums = [f"{pn} {name.get(pn) or ''}".strip() + f": {len(hits) if len(totals) == 1 else c}곳, "
                 f"제품 1대당 {number(tot)}{(' ' + u) if u else ''}" for (pn, u), (tot, c) in totals.items()]
         shown = lines[:LINE_MAX]
-        preview = f"'{a.find}': {len(hits)}곳에 쓰입니다. " + " / ".join(sums) + ("\n" + "\n".join(shown) if shown else "")
+        more = [f"(나머지 {len(lines) - len(shown)}줄은 {save})"] if len(lines) > len(shown) else []   # diff와 같은 모양
+        preview = limit + f"'{a.find}': {len(hits)}곳에 쓰입니다. " + " / ".join(sums) + ("\n" + "\n".join(shown + more) if shown else "")
         out = rt.ok("where-used", preview, ok_,
                     "preview의 줄을 사용자에게 그대로 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요."
                     + (" 잘렸으면 전체는 output_file에 있습니다." if len(lines) > LINE_MAX else ""),
                     unverified, count=len(hits), lines=shown, totals=sums, truncated=len(lines) > LINE_MAX, output_file=save,
-                    work=pk.work)
+                    result_folder=folder)
     if warnings:
         out["warnings"] = warnings
         out["agent_directive"] += " warnings도 그대로 알리세요."
@@ -551,7 +761,137 @@ def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# 6. Parser
+# 6. history: 한 BOM의 지난 diff 결과를 시간순으로 (변경 이력)
+# ==============================================================================
+
+def _file_id(path: str) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _stat(path: str) -> Dict[str, Any]:
+    try:
+        st = os.stat(path)
+        return {"mtime": int(st.st_mtime), "size": st.st_size}
+    except OSError:
+        return {}
+
+
+def _write_record(stem: str, a: Any, counts: Dict[str, int], head: str, summary: str, changes: str,
+                  paint: List[str], verified: bool) -> None:
+    """diff 1번 = 기록 하나 (<결과 폴더>/diff_<새 판>_<시각>_기록.json). history가 결과 폴더들에서 모아 읽음."""
+    rec = {"tool": rt.TOOL_NAME, "version": rt.VERSION, "at": datetime.now().isoformat(timespec="seconds"),
+           "old": os.path.abspath(a.old), "new": os.path.abspath(a.new), "old_file": _stat(a.old), "new_file": _stat(a.new),
+           "sheet": a.sheet or a.old_sheet or "", "new_sheet": a.new_sheet or "", "counts": counts,
+           "head": head.splitlines()[-1], "verified": verified, "summary": summary, "changes": changes, "paint": paint}
+    try:
+        text = json.dumps(rec, ensure_ascii=False, indent=1)
+        with open(stem + "_기록.json", "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError as e:
+        sys.stderr.write(f"[WARN] 비교 기록을 저장하지 못했습니다 ({type(e).__name__}). 이 비교는 history에 나오지 않습니다.\n")
+
+
+def _records(start: str) -> List[Dict[str, Any]]:
+    """start 파일과 비교로 이어진 모든 판의 기록 (옛 판·새 판을 따라 이어 감). 기록은 각 옛 판 옆 결과 폴더에 있음."""
+    found: Dict[str, Dict[str, Any]] = {}
+    seen_dirs: set = set()
+    files = {_file_id(start)}
+    todo = [_file_id(os.path.dirname(os.path.abspath(start)))]
+    while todo:
+        d = todo.pop()
+        if d in seen_dirs:
+            continue
+        seen_dirs.add(d)
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for n in names:
+            folder = os.path.join(d, n)
+            if not os.path.isfile(os.path.join(folder, RESULT_MARKER)):
+                continue
+            for f in os.listdir(folder):
+                p = _file_id(os.path.join(folder, f))
+                if f.endswith("_기록.json") and p not in found:
+                    try:
+                        with open(p, encoding="utf-8") as h:
+                            found[p] = json.load(h)
+                    except (OSError, ValueError):
+                        continue
+        grew = True
+        while grew:                                      # 비교로 이어진 판 모으기
+            grew = False
+            for rec in found.values():
+                ends = {_file_id(rec.get("old", "")), _file_id(rec.get("new", ""))}
+                if ends & files and not ends <= files:
+                    files |= ends
+                    grew = True
+        todo.extend(os.path.dirname(f) for f in files)
+    out = [dict(r, record=p) for p, r in found.items() if {_file_id(r.get("old", "")), _file_id(r.get("new", ""))} & files]
+    last: Dict[str, Dict[str, Any]] = {}                 # 파일이 그대로인 같은 비교를 여러 번 했으면 마지막 것만
+    for r in sorted(out, key=lambda r: r.get("at", "")):
+        same = json.dumps([_file_id(r.get("old", "")), _file_id(r.get("new", "")), r.get("old_file"), r.get("new_file"),
+                           r.get("sheet"), r.get("new_sheet")], sort_keys=True)
+        last.pop(same, None)
+        last[same] = r
+    return sorted(last.values(), key=lambda r: r.get("at", ""))
+
+
+def cmd_history(a: Any) -> Dict[str, Any]:
+    _retry_pending()
+    start = os.path.abspath(str(a.file).strip().strip('"'))
+    if not os.path.isfile(start):
+        raise FileNotFoundError(f"파일이 없습니다: {start}")
+    recs = _records(start)
+    name = os.path.basename(start)
+    if not recs:
+        return rt.ok("history", f"'{name}'로 한 두 판 비교 기록이 없습니다 (찾은 비교 0건).", True,
+                     "0건. 이 파일로 한 비교 기록이 없습니다. preview를 그대로 알리고 다시 실행하지 마세요. "
+                     "두 판을 비교하려면 mbom-diff 스킬을 쓰세요.", None, count=0, lines=[])
+    lines: List[str] = []
+    warnings: List[str] = []
+    head_cols = ["비교 시각", "옛 판", "새 판"]
+    body: List[Dict[str, str]] = []
+    for r in recs:
+        at = r.get("at", "").replace("T", " ")[:16]
+        old, new = os.path.basename(r.get("old", "")), os.path.basename(r.get("new", ""))
+        lines.append(f"[비교] {at} {old} -> {new}: {r.get('head', '')}")
+        for side in ("old", "new"):
+            now, then_ = _stat(r.get(side, "")), r.get(f"{side}_file") or {}
+            if not now:
+                warnings.append(f"{at} 비교의 {os.path.basename(r.get(side, ''))}이(가) 지금 없습니다.")
+            elif then_ and now != then_:
+                warnings.append(f"{at} 비교 뒤 {os.path.basename(r.get(side, ''))}이(가) 바뀌었습니다 (기록은 그때의 비교).")
+        if not r.get("verified", True):
+            warnings.append(f"{at} 비교는 확인하지 못한 것이 있었습니다 (UNVERIFIED, 그 비교의 요약 파일 첫 줄).")
+        path = r.get("changes", "")
+        if not os.path.isfile(path):
+            warnings.append(f"{at} 비교의 변경내용 파일이 없습니다: {path}")
+            continue
+        for row in csv.DictReader(io.StringIO(rt.read_text_file(path))):
+            for c in row:
+                if c not in head_cols:
+                    head_cols.append(c)
+            body.append(dict(row, **{"비교 시각": at, "옛 판": old, "새 판": new}))
+    folder = result_dir(start)
+    save, ok_ = write_csv(stamped(folder, f"변경이력_{file_part(os.path.splitext(name)[0])}") + ".csv", head_cols,
+                          [[b.get(c, "") for c in head_cols] for b in body], "변경 이력 파일")
+    shown = lines[:LINE_MAX]
+    more = [f"(나머지 {len(lines) - len(shown)}줄은 {save})"] if len(lines) > len(shown) else []
+    versions = {os.path.basename(r.get(s, "")) for r in recs for s in ("old", "new")}
+    preview = "\n".join([f"'{name}'와 이어진 두 판 비교 {len(recs)}건 (판 {len(versions)}개, 오래된 것부터)."] + shown + more
+                        + [f"변경 이력 파일: {save} (변경 {len(body)}줄)"])
+    out = rt.ok("history", preview, ok_, "preview를 그대로 사용자에게 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요.",
+                None if ok_ else ["저장한 변경 이력 파일의 행 수를 확인하지 못함"], count=len(recs), lines=shown,
+                truncated=len(lines) > len(shown), output_file=save, result_folder=folder)
+    if warnings:
+        out["warnings"] = warnings
+        out["agent_directive"] += " warnings도 그대로 알리세요."
+    return out
+
+
+# ==============================================================================
+# 7. Parser
 # ==============================================================================
 
 def build_cli() -> rt.JsonArgumentParser:
@@ -574,10 +914,12 @@ def build_cli() -> rt.JsonArgumentParser:
     p.add_argument("--level", help="Level 열 이름 (생략하면 찾음)")
     p.add_argument("--part", help="품번 열 이름 (생략하면 찾음)")
     p.add_argument("--qty", help="수량 열 이름 (생략하면 찾음)")
+    p = rt.add_command(sub, root, "history", "한 BOM의 지난 두 판 비교(diff) 결과를 시간순으로 모으기 (변경 이력)")
+    p.add_argument("--file", required=True, help="그 BOM의 어느 판이든 (.xlsx, .xlsm, .csv)")
     return root
 
 
-COMMANDS = {"diff": cmd_diff, "where-used": cmd_where_used}
+COMMANDS = {"diff": cmd_diff, "where-used": cmd_where_used, "history": cmd_history}
 
 
 def main(argv: Optional[List[str]] = None) -> None:

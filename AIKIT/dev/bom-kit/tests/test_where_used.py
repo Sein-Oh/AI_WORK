@@ -26,7 +26,7 @@ def test_where_used_finds_every_place_and_the_quantity_per_product(bom_csv):
     assert d["totals"] == ["000125 볼트 M3x12 (아연): 10곳, 제품 1대당 31 EA"]
     assert "[쓰임] 000125: 100100 하우징 조립 아래 4 EA (경로 DR-200/100100/000125, 엑셀 행 16)" in d["lines"]
     assert "[쓰임] 000125: 300210 유성기어 스테이지 아래 3 EA (경로 DR-200/100300/300210#2/000125, 엑셀 행 66)" in d["lines"]
-    assert os.path.isfile(d["output_file"]) and d["output_file"].endswith("_쓰인곳.csv")
+    assert os.path.isfile(d["output_file"]) and os.path.basename(os.path.dirname(d["output_file"])) == "MBOM_DR200_bom" and os.path.basename(d["output_file"]).startswith("쓰인곳_000125_")
 
 
 def test_quantity_is_multiplied_along_the_path(bom_csv):
@@ -45,6 +45,22 @@ def test_a_word_in_the_name_finds_every_part_and_counts_them_apart(bom_csv):
                            "000124 나사 M4x12 (아연): 2곳, 제품 1대당 6 EA",
                            "500130 척 고정 나사 (왼나사): 1곳, 제품 1대당 1 EA",
                            "900020 나사 고정제: 1곳, 제품 1대당 0.5 ML"]              # 단위가 다르면 따로
+    # 숨긴 폐기 품목이 결과에 든 것을 따로 알림 (집 PC 2026-11-14 B4, 0.1.2). 000125에는 숨긴 행이 없음
+    assert "찾은 곳 중 1곳은 숨긴 행(또는 자동 필터로 가려진 행)입니다 (엑셀 행 9, 품번 110099). 결과와 제품 1대당 수량에 넣었습니다." in d["warnings"]
+    code, d = script("--file", bom_csv, "--find", "000125")
+    assert code == 0 and not any("찾은 곳 중" in w for w in d["warnings"])
+
+
+def test_more_than_thirty_places_say_where_the_rest_is(env, tmp_path):
+    """30곳을 넘으면 preview 끝에 나머지가 있는 파일 (diff와 같은 모양, 집 PC 2026-11-14 큰 BOM 0.1.2)."""
+    p = tmp_path / "big.csv"
+    p.write_text("Level,Part Number,품명,Qty\n0,TOP,제품,1\n" + "".join(f"1,A{i},조립,1\n2,B1,볼트,2\n" for i in range(35)),
+                 encoding="utf-8")
+    code, d = script("--file", p, "--find", "B1")
+    assert code == 0 and d["count"] == 35 and d["truncated"] is True and len(d["lines"]) == 30
+    assert d["preview"].splitlines()[-1] == f"(나머지 5줄은 {d['output_file']})"
+    code, d = script("--file", p, "--find", "A1")
+    assert code == 0 and d["truncated"] is False and "나머지" not in d["preview"]
 
 
 def test_nothing_found_and_a_missing_column_stop_cleanly(bom_csv):
