@@ -27,7 +27,7 @@ AI_WORK/
 │   └── doc-classifier/        # 폴더 파일 목록화/분류 0.9.2 (다른 개발자 담당으로 보관)
 ├── AIKIT/                     # 사내 PC C:\AIKIT로 통째로 복사 (아래 AIKIT/dev 포함). OpenCode 프로젝트 폴더 (이 폴더를 프로젝트로 열 때만 우리 도구를 씀)
 │   ├── AGENTS.md              # 전역 지침 (C:\AIKIT 프로젝트의 지침, 설정 파일 없이 폴더 모양으로 읽힘)
-│   ├── .opencode/skills/<이름>/SKILL.md # 프로젝트 스킬: 폴더 하나 = 스킬 하나. 기본 13개(ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit,
+│   ├── .opencode/skills/<이름>/SKILL.md # 프로젝트 스킬: 폴더 하나 = 스킬 하나. 기본 14개(ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit, mbom-diff,
 │   │                          #   excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit), 그 밖은 사용자 스킬(git 제외)
 │   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
 │   ├── opencode.json          # 셸·권한·폐쇄망 잠금 (setup이 사용자 전역 설정에도 합침). 사내 LLM 설정 opencode.jsonc는 사용자 전역 설정에

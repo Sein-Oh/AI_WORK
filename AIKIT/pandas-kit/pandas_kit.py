@@ -39,6 +39,7 @@ MARKER = ".created_by_pandas-kit"
 STEPS_FILE = "steps.json"
 ROW = "_row"                       # Excel row number of the source file (hidden column, kept through every step)
 ROW_SHOWN = "엑셀 행"
+EMPTY_SHOWN = "(빈 칸)"             # group의 빈 값 묶음 이름 (사용자 결정 2026-11-14, null 대신)
 OPS = (">=", "<=", "!=", "!~", "=", ">", "<", "~")
 _COND = re.compile(r"^\s*(.+?)\s*(>=|<=|!=|!~|=|>|<|~)\s*(.*?)\s*$", re.S)
 _RANGE = re.compile(r"^([A-Z]{1,3})?(\d+)?(?::([A-Z]{1,3})?(\d+)?)?$")
@@ -370,32 +371,18 @@ def parse_range(text: Optional[str]) -> Optional[Tuple[Optional[int], Optional[i
             None if one_cell else (col_index(c2) if c2 else None), None if one_cell else (int(r2) if r2 else None))
 
 
-def resolve_file(path: Optional[str]) -> str:
-    """--file, or the workbook open in Excel (only its path is read)."""
-    if path:
-        full = os.path.abspath(str(path).strip().strip('"'))
-        if not os.path.isfile(full):
-            raise FileNotFoundError(f"파일이 없습니다: {full}")
-        if os.path.splitext(full)[1].lower() not in TABLE_EXTS:
-            raise rt.InputError(f"읽을 수 있는 파일은 {', '.join(TABLE_EXTS)}입니다: {os.path.basename(full)}")
-        for wb in rt.open_workbooks():
-            if wb["path"] and os.path.normcase(wb["path"]) == os.path.normcase(full) and not wb["saved"]:
-                raise rt.InputError(f"{os.path.basename(full)}이(가) Excel에서 열려 있고 저장되지 않은 변경이 있습니다. "
-                                    "Excel에서 저장한 뒤 같은 명령을 다시 실행하세요 (도구가 대신 저장하지 않음).")
-        return full
-    books = rt.open_workbooks()
-    if not books:
-        raise rt.InputError("읽을 파일을 정하지 못했습니다 (열린 Excel 통합문서 없음). 사용자에게 파일 경로를 물어 --file \"<경로>\"로 주세요.")
-    unsaved = [b for b in books if not b["saved"]]
-    if len(books) == 1:
-        if unsaved:
-            raise rt.InputError(f"Excel의 {books[0]['name']}에 저장되지 않은 변경이 있습니다(저장한 적 없는 새 통합문서 포함). "
+def resolve_file(path: str) -> str:
+    """--file (Excel에 열려 있으면 저장됐는지만 봄). 열린 통합문서를 고르는 일은 _select_needs_input."""
+    full = os.path.abspath(str(path).strip().strip('"'))
+    if not os.path.isfile(full):
+        raise FileNotFoundError(f"파일이 없습니다: {full}")
+    if os.path.splitext(full)[1].lower() not in TABLE_EXTS:
+        raise rt.InputError(f"읽을 수 있는 파일은 {', '.join(TABLE_EXTS)}입니다: {os.path.basename(full)}")
+    for wb in rt.open_workbooks():
+        if wb["path"] and os.path.normcase(wb["path"]) == os.path.normcase(full) and not wb["saved"]:
+            raise rt.InputError(f"{os.path.basename(full)}이(가) Excel에서 열려 있고 저장되지 않은 변경이 있습니다. "
                                 "Excel에서 저장한 뒤 같은 명령을 다시 실행하세요 (도구가 대신 저장하지 않음).")
-        return books[0]["path"]
-    saved = [b for b in books if b["saved"]]
-    if not saved:
-        raise rt.InputError("열린 Excel 통합문서가 모두 저장되지 않았습니다. 읽을 문서를 Excel에서 저장한 뒤 다시 실행하세요.")
-    raise rt.ask([b["name"] for b in saved], [argv_setting("--file", b["path"]) for b in saved], "열린 Excel 통합문서 중 읽을 파일")
+    return full
 
 
 def _csv_rows(path: str) -> List[List[Any]]:
@@ -1061,7 +1048,7 @@ def op_group(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]]
     out_rows = []
     for key, g in work.groupby(by, sort=False, dropna=False):
         key = key if isinstance(key, tuple) else (key,)
-        row: Dict[str, Any] = {b: (None if v is None or v is pd.NA or (isinstance(v, float) and v != v) else v)
+        row: Dict[str, Any] = {b: (EMPTY_SHOWN if v is None or v is pd.NA or (isinstance(v, float) and v != v) else v)
                                for b, v in zip(by, key)}
         row["행 수"] = len(g)
         for c in sums:
@@ -1155,8 +1142,39 @@ def check_name(name: Optional[str], work: Work) -> str:
     return name
 
 
+def _select_needs_input(a: Any) -> rt.InputError:
+    """--file도 --from도 없는 select: 무엇을 읽을지 도구가 짐작하지 않고 멈춤 (사용자 결정 2026-11-14).
+    지금 표에서 고르는 명령과 Excel에 열린(저장된) 통합문서를 읽는 명령을 전체 명령으로 줌."""
+    cands, argvs = [], []
+    work = os.path.abspath(a.work) if getattr(a, "work", None) else current_work()
+    if work:
+        try:
+            cur = Work(work).resolve(None, "--from")[0]
+            cands.append(f"지금 표 {cur}에서 고르기")
+            argvs.append(argv_setting("--from", cur))
+        except Exception:
+            pass
+    books = rt.open_workbooks()
+    for b in books:
+        if b["saved"] and b["path"]:
+            cands.append(f"Excel에 열린 {b['name']} 읽기")
+            argvs.append(argv_setting("--file", b["path"]))
+    unsaved = [b["name"] for b in books if not b["saved"]]
+    note = f" (Excel에 저장하지 않은 문서 {', '.join(unsaved)}은(는) 저장해야 읽을 수 있음)" if unsaved else ""
+    head = "select에는 --file(파일 읽기)이나 --from(만든 표에서 고르기) 중 하나가 필요합니다" + note + "."
+    if not cands:
+        return rt.InputError(head + " 사용자에게 읽을 파일 경로를 물어 --file \"<경로>\"로 주세요.")
+    if len(cands) == 1:
+        return rt.InputError(f"{head} [추천] {rt.full_command(argvs[0])}")
+    err = rt.ask(cands, argvs, "읽을 대상")
+    err.args = (head + " " + err.args[0],) + err.args[1:]
+    return err
+
+
 def cmd_select(a: Any) -> Dict[str, Any]:
-    if a.file or (not a.source and not current_work() and not getattr(a, "work", None)):
+    if not a.file and not a.source:
+        raise _select_needs_input(a)
+    if a.file:
         path = resolve_file(a.file)
         if a.source:
             raise rt.InputError("--file과 --from은 함께 쓰지 않습니다 (파일을 읽거나, 만든 표에서 고르거나).")
@@ -1556,6 +1574,9 @@ def cmd_chart(a: Any) -> Dict[str, Any]:
                             f"단위가 다른 값을 함께 {'더해 ' if summed else ''}그렸습니다. 단위 하나만 보려면 먼저 "
                             f"{rt.full_command(['select', '--from', name, '--where', f'{unit}={units[0]}'])} 로 고른 표로 그리세요.")
     truncated = False
+    if kind == "line" and x and data[x].astype("string").duplicated().any():   # 사용자 결정 2026-11-14: 합계하지 않고 경고
+        warnings.append(f"--x '{x}'의 같은 값이 여러 행이라 선이 표 순서대로 같은 x를 오가며 그려졌습니다. 값마다 합계로 보려면 "
+                        f"{rt.full_command(argv_setting('--kind', 'bar'))} 로 막대를 그리세요.")
     if kind in ("bar", "pie") and x and data[x].astype("string").duplicated().any():
         data = data.assign(**{x: data[x].astype("string")}).groupby(x, sort=False, dropna=False)[ys].sum().reset_index()
         warnings.append(f"--x '{x}'의 같은 값이 여러 행이라 값마다 --y를 합계로 그렸습니다.")
@@ -1662,7 +1683,7 @@ def build_cli() -> rt.JsonArgumentParser:
         return p
 
     p = cmd("select", "파일(시트·범위)이나 만든 표에서 열과 조건으로 골라 이름 붙인 표 만들기")
-    p.add_argument("--file", help="읽을 파일 (.xlsx, .xlsm, .csv). 생략하면 만든 표(--from 또는 지금 표), 표가 없으면 열린 Excel 통합문서")
+    p.add_argument("--file", help="읽을 파일 (.xlsx, .xlsm, .csv). 만든 표에서 고를 때는 --from (둘 다 없으면 도구가 읽을 것을 묻는다)")
     p.add_argument("--sheet", help="시트 이름 (생략하면 파일을 열었을 때 보이는 시트)")
     p.add_argument("--range", help="읽을 범위 (예: B5:H230, B:H, 왼쪽 위 칸 B5). 생략하면 도구가 표를 찾음")
     p.add_argument("--from", dest="source", help="고를 표 이름 (생략하면 지금 표)")

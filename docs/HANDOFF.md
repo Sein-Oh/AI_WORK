@@ -7,14 +7,14 @@
 - 버전: ml-kit 2.9.92, office-cli 1.6.7. 작업 브랜치 `ccr-ecab210c-awib23` (머지는 사용자가 정함).
 - 배포: `C:\AIKIT` 한 폴더 (도구, `.opencode\skills\`, `dev\`, `guide\`, `AGENTS.md`, `opencode.json`, `setup.bat`, `web.bat`). `C:\AIKIT`은 OpenCode 프로젝트
   (우리 도구는 이 폴더를 프로젝트로 열 때만). 사내 LLM 설정(`opencode.jsonc`)과 폐쇄망 잠금은 사용자 전역 설정 `%USERPROFILE%\.config\opencode` (2026-11-13).
-- 기본 스킬 13개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit(0.2.2, 기반 도구).
+- 기본 스킬 14개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit(0.2.3, 기반 도구), mbom-diff(pandas-kit 조합 스킬).
 - 기준 모델 Gemma (합격 기준), BEAM도 씀. 시험: 클라우드 pytest, 집·회사 PC 실기 러너와 눈 확인, Gemma 시나리오.
 - 1.6.7 새 기반 기능(엑셀 서식 칸·이름 정의·자동 필터·그림·링크, 워드 머리글·링크·책갈피, PPT 표, Outlook 연락처, `office.py open`)은
   실기 러너 P 그룹으로 실제 Office에서 확인할 차례 (집 PC Office 2019 회귀는 통과, 3장).
 
 ## 2. 회사 PC에서 할 일
 상세: [`opencode/실기테스트.md`](opencode/실기테스트.md).
-1. 준비: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`, `pandas-kit`), `dev`, 기본 스킬 13개 폴더, `guide`, `AGENTS.md`, `opencode.json`, `setup.py`·`setup.bat`·`web.bat`을
+1. 준비: `C:\AIKIT`의 도구 폴더(`ml-kit`, `office-cli`, `pandas-kit`), `dev`, 기본 스킬 14개 폴더, `guide`, `AGENTS.md`, `opencode.json`, `setup.py`·`setup.bat`·`web.bat`을
    새로 붙여넣음 (`python\`, `opencode.exe`, 사용자 스킬 폴더, `data\`는 둠). 이번 한 번은 예전 구성 옮기기(실기테스트.md 1장 1번). `setup.bat`(관리자) -> 새 터미널·OpenCode 다시 시작.
 2. 자동 점검 (질문 없음): `cd C:\AIKIT\dev` -> `python run_all_tests.py --label 회사PC --outlook`
    (환경 진단 -> ml-kit 베타 점검 -> 사용법 단순성 점검 -> office-cli 실기 러너(`--outlook`이면 Outlook 그룹까지) -> 도구 오류 로그). 결과 `result_회사PC_<시각>.md`.

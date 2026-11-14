@@ -2,6 +2,19 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
 
+## [0.2.3] - 2026-11-14
+
+### 사용자 결정 반영 (개선점_MBOM.md F)
+- `select`: `--file`·`--from` 둘 다 없으면 멈춤 (전에는 만든 표가 있으면 지금 표, 없으면 열린 Excel 통합문서를 말없이 골랐음).
+  지금 표에서 고르는 명령과 열린(저장된) 통합문서를 읽는 명령을 `[후보]`로, 하나면 `[추천]`. 시험 `test_select_without_file_or_from_stops_and_gives_full_commands`.
+- `chart --kind line`: 같은 `--x` 값이 여러 행이면 합계하지 않고 `warnings` + 막대로 그리는 전체 명령. 시험 `test_chart_sums_repeated_x_limits_bars_and_checks_columns`.
+- `group`: 빈 값 묶음 이름이 `null` -> `(빈 칸)`. 시험 `test_group_names_the_empty_value_group`.
+- 그대로 두기로 한 것: 글자 열의 `=`는 글자 그대로 비교(0.2.1의 경고 유지), `group --sum`은 비율 열도 더함.
+
+### 스킬
+- `mbom-diff`를 기본 스킬로 (`AIKIT/.opencode/skills/mbom-diff`, setup 기본 스킬 14개). 다른 상위로 옮겨진 품목은 `[이동]`이 아니라
+  삭제·추가로, 대체 후보는 품번만 보고 같은 자리에서 (옮겨진 품번은 짝짓지 않음).
+
 ## [0.2.2] - 2026-11-14
 
 ### 수정 (두 판 비교 스킬로 v2 -> v2_mod를 찾아 보며, 개선점_MBOM.md G)
@@ -11,7 +24,7 @@
 
 ### 시험 자료
 - `make_mbom_samples.py`: `MBOM_DR200_v2_mod.xlsx` (v2를 회사 BOM 개정처럼 고친 판, 정답 `MOD_CHANGES`, 함정 `MOD_TRAPS`).
-- 조합 스킬 예 `tools/skills/mbom-diff/` (SKILL.md, `scripts/mbom_path.py`, `scripts/mbom_summary.py`): 경로로 두 판을 맞춰
+- 조합 스킬 예 `tools/skills/mbom-diff/`(0.2.3에서 기본 스킬로) (SKILL.md, `scripts/mbom_path.py`, `scripts/mbom_summary.py`): 경로로 두 판을 맞춰
   이동·대체 후보·추가·삭제·바뀐 칸을 알림. 업무 판단이라 도구가 아니라 스킬. 시험 `test_mbom_diff_skill.py`(정답과 같은지, 함정이 안 나오는지).
 
 ## [0.2.1] - 2026-11-14

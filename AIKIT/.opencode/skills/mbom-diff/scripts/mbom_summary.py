@@ -3,10 +3,10 @@ r"""MBOM 두 판 비교 결과(pandas-kit diff를 경로 키로 export한 csv)�
 
     python "<스킬 폴더>\scripts\mbom_summary.py" --file "<변경내용.csv>"
 
-- 이동: 같은 품번이 한 곳에서 삭제되고 다른 상위 아래에 추가됨 (하위 품목이 함께 옮겨진 것은 묶어서 개수만).
-- 대체 후보: 같은 상위 아래 같은 자리(앞이나 뒤의 형제 품번이 같음)에서 품번이 삭제되고 다른 품번이 추가됨
+- 대체 후보: 같은 상위 아래 같은 자리(앞이나 뒤의 형제 품번이 같음)에서 품번이 삭제되고 다른 품번이 추가됨 (품번만 봄, 품명은 보지 않음.
+  삭제와 추가에 모두 있는 품번은 옮겨진 것이라 짝짓지 않음)
   (옆의 <표>_경로.csv로 형제 순서를 봄, 없으면 삭제 하나·추가 하나일 때만. 짐작이라 사용자 확인이 필요).
-- 추가·삭제: 나머지. 바뀐 칸: 품번마다 열: 옛 값 -> 새 값.
+- 추가·삭제: 나머지. 다른 상위 아래로 옮겨진 품목도 삭제·추가로 둔다 (사용자 결정 2026-11-14: 이동으로 묶지 않음). 바뀐 칸: 품번마다 열: 옛 값 -> 새 값.
 결과: 입력 옆 <이름>_요약.txt, stdout은 1줄 JSON (preview를 사용자에게 그대로 알림).
 """
 import argparse
@@ -69,32 +69,18 @@ def where(parent):
 def summarize(rows, kind, key, ocol, ncol, order=None):
     dels = [(r[key], r.get(ocol) or "") for r in rows if r[kind] == "삭제"]
     adds = [(r[key], r.get(ncol) or "") for r in rows if r[kind] == "추가"]
-    lines, counts = [], {"이동": 0, "대체 후보": 0, "추가": 0, "삭제": 0, "바뀐 칸": 0}
-    # 이동: 같은 품번 (삭제 하나, 추가 하나를 차례로 짝)
-    moves = []
-    for d in list(dels):
-        a = next((a for a in adds if split(a[0])[1] == split(d[0])[1]), None)
-        if a:
-            moves.append((d, a))
-            dels.remove(d)
-            adds.remove(a)
-    top = [m for m in moves if not any(m is not o and m[0][0].startswith(o[0][0] + "/") for o in moves)]
-    for d, a in top:
-        kids = sum(1 for m in moves if m[0][0].startswith(d[0] + "/"))
-        (op, pn), (np_, _) = split(d[0]), split(a[0])
-        what = f"{where(op)} -> {where(np_)}" if op != np_ else "같은 상위 아래 순번이 바뀜"
-        lines.append(f"[이동] {pn}: {what}" + (f" (하위 {kids}개 함께)" if kids else "")
-                     + f" (옛 엑셀 행 {d[1]}, 새 엑셀 행 {a[1]})")
-    counts["이동"] = len(top)
+    lines, counts = [], {"대체 후보": 0, "추가": 0, "삭제": 0, "바뀐 칸": 0}
     # 대체 후보: 같은 상위 아래, 앞이나 뒤의 형제 품번이 같은 자리 (형제 순서를 모르면 삭제 하나·추가 하나일 때만)
-    for d in list(dels):
+    # 같은 품번이 삭제와 추가에 모두 있으면 옮겨진 품목이라 대체 짝에서 뺌 (삭제·추가로 둠)
+    moved = {split(x[0])[1] for x in dels} & {split(x[0])[1] for x in adds}
+    for d in [x for x in dels if split(x[0])[1] not in moved]:
         parent = split(d[0])[0]
-        same_a = [x for x in adds if split(x[0])[0] == parent]
+        same_a = [x for x in adds if split(x[0])[0] == parent and split(x[0])[1] not in moved]
         if order:
             spot = order[0].get(d[0])
             same_a = [x for x in same_a if spot and (order[1].get(x[0]) or (None, None))[0] == spot[0]] or \
                      [x for x in same_a if spot and (order[1].get(x[0]) or (None, None))[1] == spot[1]]
-        elif len([x for x in dels if split(x[0])[0] == parent]) != 1:
+        elif len([x for x in dels if split(x[0])[0] == parent and split(x[0])[1] not in moved]) != 1:
             continue
         if len(same_a) != 1:
             continue
