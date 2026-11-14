@@ -45,8 +45,8 @@ STEPS_FILE = "steps.json"
 ROW = "_row"                       # Excel row number of the source file (hidden column, kept through every step)
 ROW_SHOWN = "엑셀 행"
 EMPTY_SHOWN = "(빈 칸)"             # group의 빈 값 묶음 이름 (사용자 결정 2026-11-14, null 대신)
-OPS = (">=", "<=", "!=", "!~", "=", ">", "<", "~")
-_COND = re.compile(r"^\s*(.+?)\s*(>=|<=|!=|!~|=|>|<|~)\s*(.*?)\s*$", re.S)
+OPS = (">=", "<=", "!=", "!~", "^=", "$=", "=", ">", "<", "~")
+_COND = re.compile(r"^\s*(.+?)\s*(>=|<=|!=|!~|\^=|\$=|=|>|<|~)\s*(.*?)\s*$", re.S)
 _RANGE = re.compile(r"^([A-Z]{1,3})?(\d+)?(?::([A-Z]{1,3})?(\d+)?)?$")
 _LETTERS = re.compile(r"^[A-Z]{1,3}$")
 _NAME = re.compile(r"^[^\W\d][\w]*$")
@@ -1017,7 +1017,7 @@ def parse_where(text: str) -> List[List[Tuple[str, str, str]]]:
                 alts.append((alts[-1][0], alts[-1][1], unquote(alt)))
             else:
                 raise rt.InputError(f"--where '{text}'의 '{alt.strip()}'를 읽을 수 없습니다. 형식: '열=값;열>값' "
-                                    f"(그리고는 ;, 또는은 |, 연산자 = != > < >= <= ~(포함) !~(포함 안 함)).")
+                                    f"(그리고는 ;, 또는은 |, 연산자 = != > < >= <= ~(포함) !~(포함 안 함) ^=(로 시작) $=(로 끝)).")
         groups.append(alts)
     if not groups:
         raise rt.InputError("--where가 비어 있습니다.")
@@ -1034,6 +1034,10 @@ def _cond_mask(series: Any, op: str, val: str, notes: Optional[List[str]] = None
     if op in ("~", "!~"):
         hit = text.str.contains(val, regex=False).fillna(False).astype(bool)
         return hit if op == "~" else ~hit
+    if op in ("^=", "$="):                        # starts with / ends with (text as written, like ~)
+        t = _as_text(series)
+        hit = (t.str.startswith(val) if op == "^=" else t.str.endswith(val)).fillna(False).astype(bool)
+        return hit
     if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
         try:
             num = float(val.replace(",", ""))
@@ -1365,11 +1369,54 @@ def _numeric_cols_of(text: str, df: Any, meta: Dict[str, Any], option: str) -> L
     return cols
 
 
+AGGS = (("sum", "합계"), ("mean", "평균"), ("min", "최소"), ("max", "최대"), ("count", "개수"), ("nunique", "종류 수"))
+NUMBER_AGGS = ("sum", "mean", "min", "max")          # 숫자 열만 (count, nunique는 아무 열)
+
+
+def _filled(series: Any) -> Any:
+    """칸에 값이 있는지 (빈 칸과 공백만 있는 글자 칸은 빈 칸)."""
+    return (series.notna() & (series.astype("string").str.strip() != "").fillna(False)).astype(bool)
+
+
+def _as_text(series: Any) -> Any:
+    """칸을 보이는 글자로: 정수인 숫자는 2.0이 아니라 2 (unique의 값, ^= $= 비교)."""
+    pd = pd_mod()
+    if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+        num = pd.to_numeric(series, errors="coerce").astype("float64")
+        return num.map(lambda v: None if v != v else (str(int(v)) if float(v).is_integer() else repr(float(v)))).astype("string")
+    return series.astype("string").str.strip()
+
+
+def _agg(series: Any, how: str) -> Any:
+    if how == "sum":
+        return series.sum(min_count=1)
+    if how == "count":
+        return int(_filled(series).sum())
+    if how == "nunique":
+        return int(_as_text(series[_filled(series)]).nunique())
+    return getattr(series, how)()
+
+
+def _agg_column(values: Any, source: Any, how: str) -> Any:
+    """결과 열의 숫자 모양: 개수·종류 수는 정수, 평균은 소수 6자리, 합계·최소·최대는 모두 정수면 정수."""
+    pd = pd_mod()
+    if how in ("count", "nunique"):
+        return values.astype("Int64")
+    num = pd.to_numeric(values).astype("float64")
+    if how == "mean":
+        return num.round(6)
+    num = num.round(9)
+    whole = pd.api.types.is_integer_dtype(source) or bool(num.dropna().map(float.is_integer).all())
+    return num.astype("Int64") if whole else num
+
+
 def op_group(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
-    """One row per value of --by: 행 수, <열> 합계 for each --sum column, 엑셀 행 목록 (first 10 rows)."""
+    """One row per value of --by: 행 수, <열> 합계/평균/최소/최대/개수/종류 수 for the columns of --sum/--mean/..., 엑셀 행 목록."""
     pd = pd_mod()
     df, meta = inputs["from"]
-    by, sums = args["by"], args.get("sum") or []
+    by = args["by"]
+    aggs = [(how, label, c) for how, label in AGGS for c in (args.get(how) or [])]
+    sums = [c for how, _l, c in aggs if how in NUMBER_AGGS]
     warnings: List[str] = []
     work = df.assign(**{b: df[b].astype("string") for b in by})
     out_rows = []
@@ -1378,19 +1425,17 @@ def op_group(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]]
         row: Dict[str, Any] = {b: (EMPTY_SHOWN if v is None or v is pd.NA or (isinstance(v, float) and v != v) else v)
                                for b, v in zip(by, key)}
         row["행 수"] = len(g)
-        for c in sums:
-            row[f"{c} 합계"] = g[c].sum(min_count=1)
+        for how, label, c in aggs:
+            row[f"{c} {label}"] = _agg(g[c], how)
         if ROW in g.columns:
             rows = [int(r) for r in g[ROW].dropna().tolist()]
             row["엑셀 행 목록"] = ", ".join(str(r) for r in rows[:10]) + (" 등" if len(rows) > 10 else "")
         out_rows.append(row)
-    cols = by + ["행 수"] + [f"{c} 합계" for c in sums] + (["엑셀 행 목록"] if ROW in df.columns else [])
+    cols = by + ["행 수"] + [f"{c} {label}" for _h, label, c in aggs] + (["엑셀 행 목록"] if ROW in df.columns else [])
     out = pd.DataFrame(out_rows, columns=cols)
     out["행 수"] = out["행 수"].astype("Int64")
-    for c in sums:
-        total = pd.to_numeric(out[f"{c} 합계"]).astype("float64").round(9)
-        whole = pd.api.types.is_integer_dtype(df[c]) or bool(total.dropna().map(float.is_integer).all())
-        out[f"{c} 합계"] = total.astype("Int64") if whole else total
+    for how, label, c in aggs:
+        out[f"{c} {label}"] = _agg_column(out[f"{c} {label}"], df[c], how)
     unit = next((c for c in data_cols(df) if re.sub(r"[\s/._-]+", "", str(c)).lower() in UNIT_NAMES), None)
     if sums and unit and unit not in by:
         per = df.assign(**{unit: df[unit].astype("string").str.strip()}).groupby(
@@ -1428,8 +1473,303 @@ def op_sort(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
     return out, dict(meta), {"warnings": warnings}
 
 
+def _row_list(rows: Any) -> str:
+    """'엑셀 행 목록' 칸: 앞 10개 (group과 같은 모양)."""
+    rows = [int(r) for r in rows]
+    return ", ".join(str(r) for r in rows[:10]) + (" 등" if len(rows) > 10 else "")
+
+
+def _calc_meta() -> Dict[str, Any]:
+    """계산한 표(행이 원본 행과 1:1이 아님)의 meta."""
+    return {"letters": {}, "rows": {}, "kinds": {}}
+
+
+DESCRIBE_NUMBER = ("평균", "표준편차", "최소", "25%", "50%", "75%", "최대")
+DESCRIBE_COLS = ["열", "종류", "개수", "빈 칸", *DESCRIBE_NUMBER, "종류 수", "가장 많은 값", "가장 많은 값 개수"]
+
+
+def op_describe(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """열마다 한 행: 숫자 열은 개수·평균·표준편차·최소·25%·50%·75%·최대, 그 밖의 열은 개수·종류 수·가장 많은 값과 그 개수."""
+    pd = pd_mod()
+    df, meta = inputs["from"]
+    cols = args.get("columns") or data_cols(df)
+    nums = set(_numeric_columns(df))
+    rows, warnings, like_number = [], [], []
+    for c in cols:
+        s = df[c]
+        filled = _filled(s)
+        n = int(filled.sum())
+        row: Dict[str, Any] = {"열": c, "종류": kind_of(s), "개수": n, "빈 칸": len(s) - n}
+        if c in nums:
+            v = pd.to_numeric(s[filled], errors="coerce").astype("float64")
+            if n:
+                row.update({"평균": v.mean(), "표준편차": v.std() if n > 1 else None, "최소": v.min(), "25%": v.quantile(0.25),
+                            "50%": v.quantile(0.5), "75%": v.quantile(0.75), "최대": v.max()})
+        elif n:
+            text = _as_text(s[filled])
+            counts = text.value_counts(sort=False)
+            top = max(counts.items(), key=lambda kv: kv[1])            # 같은 개수면 먼저 나온 값
+            row.update({"종류 수": len(counts), "가장 많은 값": str(top[0]), "가장 많은 값 개수": int(top[1])})
+            as_num = pd.to_numeric(text.str.replace(",", "", regex=False), errors="coerce")
+            code = bool(text.str.match(_LEADING_ZERO.pattern).fillna(False).any())      # 앞자리 0이 있는 코드 열은 글자가 맞음
+            if not code and not pd.api.types.is_datetime64_any_dtype(s) and int(as_num.notna().sum()) >= max(1, n * 9 // 10) and n >= 2:
+                like_number.append(c)
+        rows.append(row)
+    out = pd.DataFrame(rows, columns=DESCRIBE_COLS)
+    for c in ("개수", "빈 칸", "종류 수", "가장 많은 값 개수"):
+        out[c] = pd.to_numeric(out[c]).astype("Int64")
+    for c in DESCRIBE_NUMBER:
+        out[c] = pd.to_numeric(out[c]).astype("float64").round(6)
+    if like_number:
+        warnings.append(f"글자 열인데 숫자로 읽히는 칸이 대부분인 열: {name_list(like_number, 10)}. 글자 열이라 평균·최소·최대는 내지 않았습니다 "
+                        "(숫자가 아닌 칸이 섞였거나 글자로 저장된 숫자).")
+    info = {"warnings": warnings, "numbers": len([c for c in cols if c in nums]), "others": len([c for c in cols if c not in nums])}
+    return out, _calc_meta(), info
+
+
+def op_unique(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """열마다 서로 다른 값과 그 개수 (많은 것부터, 같은 개수면 표에 먼저 나온 값부터). 빈 칸은 '(빈 칸)'."""
+    pd = pd_mod()
+    df, meta = inputs["from"]
+    has_rows = ROW in df.columns
+    rows, kinds = [], []
+    for c in args["columns"]:
+        text = _as_text(df[c]).where(_filled(df[c]), EMPTY_SHOWN)
+        found: Dict[str, List[int]] = {}
+        for i, v in enumerate(text.tolist()):
+            found.setdefault(str(v), []).append(i)
+        kinds.append((c, len(found)))
+        for v, idx in sorted(found.items(), key=lambda kv: -len(kv[1])):       # sorted는 같은 개수의 순서를 지킴
+            row = {"열": c, "값": v, "개수": len(idx)}
+            if has_rows:
+                row["엑셀 행 목록"] = _row_list(df[ROW].iloc[idx].dropna().tolist())
+            rows.append(row)
+    out = pd.DataFrame(rows, columns=["열", "값", "개수"] + (["엑셀 행 목록"] if has_rows else []))
+    out["개수"] = pd.to_numeric(out["개수"]).astype("Int64")
+    return out, _calc_meta(), {"warnings": [], "kinds": kinds}
+
+
+# --- calc: 식을 직접 해석 (eval/exec를 쓰지 않음). 허용: 열 이름, [열 이름], 숫자, + - * /, 괄호 ---------------------------
+
+CALC_FUNCS: Dict[str, Tuple[int, int]] = {}            # 함수 이름 -> (인자 수 최소, 최대)
+_CALC_STOP = r"\s+\-*/()\[\],"                        # 감싸지 않은 열 이름에 쓸 수 없는 글자
+_CALC_TOKEN = re.compile(rf"\s*(?:(\d+(?:\.\d+)?)(?![^{_CALC_STOP}])|\[([^\]]+)\]|([+\-*/(),])|([^{_CALC_STOP}]+))")
+CALC_TOKENS_MAX = 200
+CALC_HELP = "식에는 열 이름, 숫자, + - * /, 괄호만 씁니다. 공백이나 기호가 든 열 이름은 [열 이름]으로 감쌉니다 (예: 금액=Qty*[Unit Price])."
+
+
+def _calc_tokens(text: str) -> List[Tuple[str, str]]:
+    out, pos, text = [], 0, text.rstrip()
+    while pos < len(text):
+        m = _CALC_TOKEN.match(text, pos)
+        if not m or m.end() == pos:
+            raise rt.InputError(f"--expr의 식 '{text}'에서 '{text[pos:].strip()[:20]}'을(를) 읽을 수 없습니다. {CALC_HELP}")
+        if m.group(1) is not None:
+            out.append(("num", m.group(1)))
+        elif m.group(2) is not None:
+            out.append(("col", m.group(2).strip()))
+        elif m.group(3) is not None:
+            out.append(("op", m.group(3)))
+        else:
+            out.append(("name", m.group(4)))
+        pos = m.end()
+    if len(out) > CALC_TOKENS_MAX:
+        raise rt.InputError(f"--expr의 식이 너무 깁니다 ({len(out)}개 조각, 최대 {CALC_TOKENS_MAX}). 식을 ';'로 나눠 열을 하나씩 만드세요.")
+    return out
+
+
+class _CalcParser:
+    """식 -> 나무 (목록: ["num", 2.0], ["col", "Qty"], ["neg", x], ["bin", "+", l, r], ["call", "round", [x, ...]]).
+    우선순위: 괄호·함수 > 부호 > * / > + -. 나무는 steps.json에 그대로 적어, 다시 만들 때 식을 다시 읽지 않는다."""
+
+    def __init__(self, text: str) -> None:
+        self.text, self.toks, self.i = text, _calc_tokens(text), 0
+
+    def fail(self, why: str) -> rt.InputError:
+        return rt.InputError(f"--expr의 식 '{self.text}'을(를) 읽을 수 없습니다 ({why}). {CALC_HELP}")
+
+    def peek(self) -> Tuple[str, str]:
+        return self.toks[self.i] if self.i < len(self.toks) else ("end", "")
+
+    def take(self) -> Tuple[str, str]:
+        tok = self.peek()
+        self.i += 1
+        return tok
+
+    def parse(self) -> List[Any]:
+        if not self.toks:
+            raise self.fail("식이 비어 있음")
+        node = self.expr()
+        if self.peek()[0] != "end":
+            kind, val = self.peek()
+            raise self.fail(f"'{val}' 앞에 연산자가 없음" if kind in ("num", "col", "name") or val == "(" else f"'{val}'의 자리가 맞지 않음")
+        return node
+
+    def expr(self) -> List[Any]:
+        node = self.term()
+        while self.peek() in (("op", "+"), ("op", "-")):
+            op = self.take()[1]
+            node = ["bin", op, node, self.term()]
+        return node
+
+    def term(self) -> List[Any]:
+        node = self.unary()
+        while self.peek() in (("op", "*"), ("op", "/")):
+            op = self.take()[1]
+            node = ["bin", op, node, self.unary()]
+        return node
+
+    def unary(self) -> List[Any]:
+        if self.peek() == ("op", "-"):
+            self.take()
+            return ["neg", self.unary()]
+        if self.peek() == ("op", "+"):
+            self.take()
+            return self.unary()
+        return self.atom()
+
+    def atom(self) -> List[Any]:
+        kind, val = self.take()
+        if kind == "num":
+            return ["num", float(val)]
+        if kind == "col":
+            return ["col", val]
+        if kind == "name":
+            if self.peek() == ("op", "("):
+                fn = val.lower()
+                if fn not in CALC_FUNCS:
+                    raise self.fail(f"'{val}(' 함수는 쓸 수 없음" + (f", 쓸 수 있는 함수: {', '.join(sorted(CALC_FUNCS))}" if CALC_FUNCS else ""))
+                self.take()
+                args = [self.expr()]
+                while self.peek() == ("op", ","):
+                    self.take()
+                    args.append(self.expr())
+                if self.take() != ("op", ")"):
+                    raise self.fail("닫는 괄호 ')'가 없음")
+                low, high = CALC_FUNCS[fn]
+                if not low <= len(args) <= high:
+                    raise self.fail(f"{fn}()에 넣는 값의 수가 맞지 않음")
+                return ["call", fn, args]
+            return ["col", val]
+        if (kind, val) == ("op", "("):
+            node = self.expr()
+            if self.take() != ("op", ")"):
+                raise self.fail("닫는 괄호 ')'가 없음")
+            return node
+        raise self.fail("식이 끝나지 않음" if kind == "end" else f"'{val}'의 자리가 맞지 않음")
+
+
+def _calc_cols(node: List[Any]) -> List[str]:
+    if node[0] == "col":
+        return [node[1]]
+    if node[0] == "neg":
+        return _calc_cols(node[1])
+    if node[0] == "bin":
+        return _calc_cols(node[2]) + _calc_cols(node[3])
+    if node[0] == "call":
+        return [c for a in node[2] for c in _calc_cols(a)]
+    return []
+
+
+def _calc_rename(node: List[Any], names: Dict[str, str]) -> List[Any]:
+    """식에 적은 열 이름을 표의 실제 열 이름으로 (대소문자·공백 차이, 열 글자)."""
+    if node[0] == "col":
+        return ["col", names[node[1]]]
+    if node[0] == "neg":
+        return ["neg", _calc_rename(node[1], names)]
+    if node[0] == "bin":
+        return ["bin", node[1], _calc_rename(node[2], names), _calc_rename(node[3], names)]
+    if node[0] == "call":
+        return ["call", node[1], [_calc_rename(a, names) for a in node[2]]]
+    return list(node)
+
+
+def _calc_number_column(series: Any, col: str, note: Dict[str, Any]) -> Any:
+    """식에 쓰는 열을 숫자로. 글자 열은 숫자로 읽히는 칸만 (천 단위 쉼표는 뺌), 숫자가 아닌 칸은 빈 값으로 두고 note에 남김."""
+    pd = pd_mod()
+    if pd.api.types.is_bool_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+        raise rt.InputError(f"--expr의 '{col}' 열은 숫자 열이 아니어서 계산할 수 없습니다 ({kind_of(series)} 열).")
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce").astype("float64")
+    filled = _filled(series)
+    num = pd.to_numeric(series.astype("string").str.strip().str.replace(",", "", regex=False), errors="coerce").astype("float64")
+    bad = filled & num.isna()
+    if int(filled.sum()) and int(bad.sum()) == int(filled.sum()):
+        raise rt.InputError(f"--expr의 '{col}' 열은 글자 열이고 숫자로 읽히는 칸이 없어 계산할 수 없습니다.")
+    if bad.any():
+        note["bad"] = note["bad"] | bad
+        note["bad_cols"].append(col)
+    return num
+
+
+def _calc_value(node: List[Any], df: Any, note: Dict[str, Any]) -> Any:
+    """나무 -> 행마다의 값 (float64 Series, 빈 값은 NaN)."""
+    pd = pd_mod()
+    kind = node[0]
+    if kind == "num":
+        return pd.Series(float(node[1]), index=df.index, dtype="float64")
+    if kind == "col":
+        return _calc_number_column(df[node[1]], node[1], note)
+    if kind == "neg":
+        return -_calc_value(node[1], df, note)
+    if kind == "bin":
+        left, right = _calc_value(node[2], df, note), _calc_value(node[3], df, note)
+        if node[1] == "+":
+            return left + right
+        if node[1] == "-":
+            return left - right
+        if node[1] == "*":
+            return left * right
+        zero = (right == 0) & left.notna()
+        note["zero"] = note["zero"] | zero
+        return (left / right.where(right != 0)).where(~zero)
+    if kind == "call":
+        return _calc_call(node[1], [_calc_value(a, df, note) for a in node[2]], node)
+    raise rt.InputError(f"작업 기록의 식을 읽을 수 없습니다 ({kind}).")
+
+
+def _calc_call(fn: str, values: List[Any], node: List[Any]) -> Any:
+    raise rt.InputError(f"'{fn}(' 함수는 쓸 수 없습니다.")
+
+
+def op_calc(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """식으로 계산한 열을 표 끝에 더함 (행과 엑셀 행 번호는 그대로). 계산하지 못한 칸은 빈 값 + warnings."""
+    pd = pd_mod()
+    df, meta = inputs["from"]
+    df = df.copy()
+    warnings: List[str] = []
+    for e in args["exprs"]:
+        none = pd.Series(False, index=df.index)
+        note: Dict[str, Any] = {"bad": none, "zero": none, "bad_cols": []}
+        val = _calc_value(e["tree"], df, note).astype("float64").round(9)
+        val = val.where(~val.isin([float("inf"), float("-inf")]))
+        whole = bool(val.notna().any()) and bool(val.dropna().map(float.is_integer).all())
+        df[e["name"]] = val.astype("Int64") if whole else val
+        rows_of = (lambda mask: f" (엑셀 행 {_rows_text([int(r) for r in df.loc[mask, ROW].dropna().tolist()])})") if ROW in df.columns \
+            else (lambda mask: "")
+        if note["bad"].any():
+            warnings.append(f"'{e['name']}' 열: {', '.join(dict.fromkeys(note['bad_cols']))} 열의 숫자가 아닌 칸 {int(note['bad'].sum())}행은 "
+                            f"계산하지 못해 빈 값으로 두었습니다{rows_of(note['bad'])}.")
+        if note["zero"].any():
+            warnings.append(f"'{e['name']}' 열: 0으로 나눈 {int(note['zero'].sum())}행은 빈 값으로 두었습니다{rows_of(note['zero'])}.")
+        empty = int((val.isna() & ~note["bad"] & ~note["zero"]).sum())
+        if empty:
+            warnings.append(f"'{e['name']}' 열: 식에 쓴 열이 빈 칸인 {empty}행은 빈 값입니다.")
+    return df, dict(meta), {"warnings": warnings}
+
+
+def op_top(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """--by 숫자 열이 큰 순(--asc면 작은 순)으로 앞 --n행. 그 열이 빈 칸인 행은 빼고, 같은 값은 표 순서대로."""
+    df, meta = inputs["from"]
+    by = args["by"]
+    empty = df[by[0]].isna()
+    out = df[~empty].sort_values(by, ascending=bool(args.get("asc")), na_position="last", kind="stable").head(int(args["n"]))
+    warnings = [f"'{by[0]}' 열이 빈 칸인 {int(empty.sum())}행은 순위에서 뺐습니다."] if empty.any() else []
+    return out.reset_index(drop=True), dict(meta), {"warnings": warnings}
+
+
 OP_FUNCS = {"select": op_select, "join": op_join, "only": op_only, "stack": op_stack, "diff": op_diff,
-            "group": op_group, "sort": op_sort}
+            "group": op_group, "sort": op_sort, "describe": op_describe, "unique": op_unique, "calc": op_calc, "top": op_top}
 
 
 def run_op(op: str, args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
@@ -1659,11 +1999,17 @@ def cmd_group(a: Any) -> Dict[str, Any]:
     work.check_sources()
     src, sid = work.resolve(a.source, "--from")
     df, meta = work.load(sid)
-    args = {"by": column_list(a.by, df, meta, "--by"),
-            "sum": _numeric_cols_of(a.sum, df, meta, "--sum") if a.sum else []}
+    args: Dict[str, Any] = {"by": column_list(a.by, df, meta, "--by")}
+    for how, _label in AGGS:
+        text = getattr(a, how, None)
+        if how in NUMBER_AGGS:
+            args[how] = _numeric_cols_of(text, df, meta, f"--{how}") if text else []
+        elif text:
+            args[how] = column_list(text, df, meta, f"--{how}")
     out, m, info = op_group(args, {"from": (df, meta)}, "")
     name = check_name(a.name, work)
-    lineage = f"{name} = {src}을(를) {','.join(args['by'])}별로 묶음 (행 수" + "".join(f", {c} 합계" for c in args["sum"]) + ")"
+    lineage = (f"{name} = {src}을(를) {','.join(args['by'])}별로 묶음 (행 수"
+               + "".join(f", {c} {label}" for how, label in AGGS for c in (args.get(how) or [])) + ")")
     _sid, ok_ = work.add("group", name, args, {"from": sid}, out, m, lineage)
     return table_answer("group", work, name, out, m, lineage, ok_, info["warnings"])
 
@@ -1679,6 +2025,128 @@ def cmd_sort(a: Any) -> Dict[str, Any]:
     lineage = f"{name} = {src}을(를) {','.join(args['by'])} " + ("큰 것부터" if a.desc else "작은 것부터") + " 정렬"
     _sid, ok_ = work.add("sort", name, args, {"from": sid}, out, m, lineage)
     return table_answer("sort", work, name, out, m, lineage, ok_, info["warnings"])
+
+
+def _one_table(a: Any, op: str, make_args: Any, lineage_of: Any) -> Dict[str, Any]:
+    """표 하나(--from)로 새 표(--name)를 만드는 명령의 공통 순서: 표 찾기 -> 인자 확인 -> 계산 -> 기록·스냅샷 -> 답.
+    make_args(df, meta, src) -> 기록에 남길 args, lineage_of(name, src, args, info) -> 한 줄 설명."""
+    work = open_work(a)
+    work.check_sources()
+    src, sid = work.resolve(a.source, "--from")
+    df, meta = work.load(sid)
+    args = make_args(df, meta, src)
+    out, m, info = run_op(op, args, {"from": (df, meta)}, "")
+    name = check_name(a.name, work)
+    lineage = lineage_of(name, src, args, info)
+    _sid, ok_ = work.add(op, name, args, {"from": sid}, out, m, lineage)
+    return table_answer(op, work, name, out, m, lineage, ok_, info["warnings"])
+
+
+def cmd_describe(a: Any) -> Dict[str, Any]:
+    return _one_table(
+        a, "describe",
+        lambda df, meta, src: {"columns": column_list(a.columns, df, meta, "--columns") if a.columns else None},
+        lambda name, src, args, info: f"{name} = {src}의 열 {info['numbers'] + info['others']}개 요약 "
+                                      f"(숫자 열 {info['numbers']}개, 그 밖의 열 {info['others']}개, 열마다 한 행)")
+
+
+def cmd_unique(a: Any) -> Dict[str, Any]:
+    return _one_table(
+        a, "unique",
+        lambda df, meta, src: {"columns": column_list(a.columns, df, meta, "--columns")},
+        lambda name, src, args, info: f"{name} = {src}의 서로 다른 값 (" + ", ".join(f"{c} {n}가지" for c, n in info["kinds"]) + ")")
+
+
+def _expr_parts(text: str) -> List[str]:
+    """'금액=Qty*단가;합=A+B' -> 식들. ','로 나눠 적었으면 ';'로 고친 전체 명령을 [추천] (round(x, 2) 같은 괄호 안의 ','는 그대로)."""
+    parts = [p.strip() for p in str(text).split(";") if p.strip()]
+    if len(parts) == 1 and "," in parts[0]:
+        pieces, cur, depth = [], "", 0
+        for ch in parts[0]:
+            depth += ch in "(["
+            depth -= ch in ")]"
+            if ch == "," and depth == 0:
+                pieces.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        pieces = [p.strip() for p in pieces + [cur] if p.strip()]
+        if len(pieces) > 1 and all("=" in p for p in pieces):
+            raise rt.InputError(f"--expr의 식 사이는 ';'로 나눕니다 (','가 아님). [추천] {rt.full_command(argv_setting('--expr', ';'.join(pieces)))}")
+    if not parts:
+        raise rt.InputError("--expr가 비어 있습니다. 형식: \"새 열 이름=식\" (예: \"금액=Qty*단가\").")
+    return parts
+
+
+def _bracket_fix(text: str, expr: str, cols: List[str]) -> Optional[str]:
+    """공백·기호가 든 열 이름을 감싸지 않고 적은 식 -> [열 이름]으로 감싼 식 (그렇게 읽히면). 아니면 None."""
+    fixed = expr
+    for c in sorted((c for c in cols if re.search(rf"[{_CALC_STOP}]", str(c))), key=lambda c: -len(str(c))):
+        fixed = re.sub(rf"(?<!\[){re.escape(str(c))}(?!\])", lambda m: f"[{c}]", fixed)
+    if fixed == expr:
+        return None
+    try:
+        tree = _CalcParser(fixed).parse()
+    except rt.InputError:
+        return None
+    return text.replace(expr, fixed, 1) if all(n in cols for n in _calc_cols(tree)) else None
+
+
+def _calc_column(n: str, df: Any, meta: Dict[str, Any], text: str) -> str:
+    """식의 열 이름 -> 표의 열. 없으면 [후보] (고친 식의 열 이름은 필요하면 [열 이름]으로 감쌈)."""
+    cols = data_cols(df)
+    try:
+        return resolve_column(n, df, meta, "--expr")
+    except rt.InputError:
+        close = difflib.get_close_matches(n, cols, n=5, cutoff=0.5)
+        if not close:
+            raise
+        old = f"[{n}]" if f"[{n}]" in text else n
+        wrap = lambda c: f"[{c}]" if re.search(rf"[{_CALC_STOP}]", str(c)) else str(c)
+        raise rt.ask(close, [argv_replacing("--expr", old, wrap(c)) for c in close], f"--expr의 열 '{n}'이(가) 없어 쓸 열") from None
+
+
+def _calc_args(a: Any, df: Any, meta: Dict[str, Any]) -> Dict[str, Any]:
+    exprs: List[Dict[str, Any]] = []
+    cols = data_cols(df)
+    made: List[str] = []
+    for part in _expr_parts(a.expr):
+        new, eq, expr = part.partition("=")
+        new, expr = new.strip().strip("[]").strip(), expr.strip()
+        if not eq or not new or not expr or expr.startswith("="):
+            raise rt.InputError(f"--expr '{part}'은(는) \"새 열 이름=식\" 모양이 아닙니다 (예: \"금액=Qty*단가\", 여러 개는 ';'로 나눔).")
+        if new in cols or new in made or is_row_col(new):
+            raise rt.InputError(f"--expr의 새 열 이름 '{new}'은(는) 이미 있는 열이거나 쓸 수 없는 이름입니다 (있는 열의 값은 바꾸지 않음). "
+                                "다른 이름을 쓰세요 (예: " + f"{new}2={expr}).")
+        try:
+            tree = _CalcParser(expr).parse()
+            names = {}
+            for n in dict.fromkeys(_calc_cols(tree)):
+                names[n] = n if n in made else _calc_column(n, df, meta, a.expr)
+        except rt.InputError as e:
+            fixed = _bracket_fix(a.expr, expr, cols)
+            if fixed:
+                raise rt.InputError("--expr에서 공백이나 기호가 든 열 이름은 [열 이름]으로 감쌉니다. "
+                                    f"[추천] {rt.full_command(argv_setting('--expr', fixed))}") from None
+            raise e
+        exprs.append({"name": new, "text": expr, "tree": _calc_rename(tree, names)})
+        made.append(new)
+    return {"exprs": exprs}
+
+
+def cmd_calc(a: Any) -> Dict[str, Any]:
+    return _one_table(
+        a, "calc", lambda df, meta, src: _calc_args(a, df, meta),
+        lambda name, src, args, info: f"{name} = {src}에 계산한 열을 더함 (" + ", ".join(f"{e['name']}={e['text']}" for e in args["exprs"]) + ")")
+
+
+def cmd_top(a: Any) -> Dict[str, Any]:
+    if a.n < 1:
+        raise rt.InputError(f"--n {a.n}은(는) 쓸 수 없습니다. 1 이상의 행 수를 주세요. [추천] {rt.full_command(argv_setting('--n', '10'))}")
+    return _one_table(
+        a, "top",
+        lambda df, meta, src: {"by": _numeric_cols_of(a.by, df, meta, "--by"), "n": int(a.n), "asc": bool(a.asc)},
+        lambda name, src, args, info: f"{name} = {src}에서 {','.join(args['by'])} " + ("작은" if args["asc"] else "큰") + f" 순 앞 {args['n']}행")
 
 
 OFFICE_EXCEL = os.path.join(os.path.dirname(rt.TOOL_DIR), "office-cli", "excel.py")
@@ -2077,16 +2545,43 @@ def build_cli() -> rt.JsonArgumentParser:
     p.add_argument("--tables", required=True, help="이을 표 이름 (','로 나눔)")
     p.add_argument("--name", help="새 표 이름")
 
-    p = cmd("group", "열 값별로 묶어 행 수와 숫자 열 합계")
+    p = cmd("group", "열 값별로 묶어 행 수와 합계·평균·최소·최대·개수·종류 수")
     p.add_argument("--from", dest="source", help="묶을 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
     p.add_argument("--by", required=True, help="묶을 열 (','로 나눔)")
     p.add_argument("--sum", help="합계를 낼 숫자 열 (','로 나눔, 생략하면 행 수만)")
+    p.add_argument("--mean", help="평균을 낼 숫자 열 (','로 나눔)")
+    p.add_argument("--min", help="최소를 볼 숫자 열 (','로 나눔)")
+    p.add_argument("--max", help="최대를 볼 숫자 열 (','로 나눔)")
+    p.add_argument("--count", help="빈 칸이 아닌 칸 수를 셀 열 (','로 나눔)")
+    p.add_argument("--nunique", help="서로 다른 값의 수를 셀 열 (','로 나눔)")
     p.add_argument("--name", help="새 표 이름")
 
     p = cmd("sort", "행 정렬 (작은 것부터, --desc는 큰 것부터)")
     p.add_argument("--from", dest="source", help="정렬할 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
     p.add_argument("--by", required=True, help="정렬 기준 열 (','로 나눔, 앞 열이 먼저)")
     p.add_argument("--desc", action="store_true", help="큰 것부터")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("describe", "열마다 요약: 숫자 열은 개수·평균·표준편차·최소·25%·50%·75%·최대, 그 밖의 열은 개수·종류 수·가장 많은 값")
+    p.add_argument("--from", dest="source", help="요약할 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
+    p.add_argument("--columns", help="요약할 열 (','로 나눔, 생략하면 모든 열)")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("unique", "열의 서로 다른 값과 그 개수 (빈 칸은 '(빈 칸)')")
+    p.add_argument("--from", dest="source", help="볼 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
+    p.add_argument("--columns", required=True, help="값을 볼 열 (','로 나눔, 열마다 따로 셈)")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("calc", "식으로 계산한 열을 더함 (열 이름, 숫자, + - * /, 괄호)")
+    p.add_argument("--from", dest="source", help="계산할 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
+    p.add_argument("--expr", required=True, help="\"새 열 이름=식\" (여러 개는 ';'로 나눔, 공백·기호가 든 열 이름은 [열 이름]. 예: \"금액=Qty*[Unit Price]\")")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("top", "숫자 열이 큰 순으로 앞 몇 행 (--asc는 작은 순)")
+    p.add_argument("--from", dest="source", help="고를 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
+    p.add_argument("--by", required=True, help="순위를 매길 숫자 열 (','로 나눔, 앞 열이 먼저)")
+    p.add_argument("--n", type=int, default=10, help="남길 행 수 (생략하면 10)")
+    p.add_argument("--asc", action="store_true", help="작은 순")
     p.add_argument("--name", help="새 표 이름")
 
     cmd("undo", "마지막 단계 하나 되돌리기")
@@ -2111,7 +2606,8 @@ def build_cli() -> rt.JsonArgumentParser:
 
 COMMANDS = {"select": cmd_select, "show": cmd_show, "join": cmd_join, "only": cmd_only, "diff": cmd_diff,
             "stack": cmd_stack, "undo": cmd_undo, "new": cmd_new, "export": cmd_export, "chart": cmd_chart,
-            "group": cmd_group, "sort": cmd_sort}
+            "group": cmd_group, "sort": cmd_sort, "describe": cmd_describe, "unique": cmd_unique, "calc": cmd_calc,
+            "top": cmd_top}
 
 
 def main(argv: Optional[List[str]] = None) -> None:
