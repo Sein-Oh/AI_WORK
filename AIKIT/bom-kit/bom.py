@@ -20,9 +20,11 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -37,6 +39,8 @@ QTY_NAMES = ("qty", "quantity", "qpa", "수량", "소요량")
 DESC_NAMES = ("description", "desc", "품명", "품목명", "내역", "규격")
 UOM_NAMES = ("uom", "unit", "단위")
 LINE_MAX = 30                         # JSON lines·preview에 넣는 줄 수 (넘으면 truncated + output_file)
+MARKER = ".created_by_pandas-kit"      # pandas-kit이 만든 작업 폴더의 표시 파일 (이것이 있는 폴더만 지움)
+WORKS_MAX = 200                       # works.json에 기억하는 실행 수
 PANDAS_KIT = os.path.join(os.path.dirname(rt.TOOL_DIR), "pandas-kit", "pandas_kit.py")   # C:\AIKIT\pandas-kit
 
 
@@ -90,14 +94,15 @@ def level_of(v: Any) -> Optional[int]:
         f = float(str(v).strip())
     except ValueError:
         return None
-    return int(f) if f == int(f) and f >= 0 else None
+    return int(f) if math.isfinite(f) and f == int(f) and f >= 0 else None      # "inf", "nan" 글자는 Level이 아님
 
 
 def qty_of(v: Any) -> Optional[float]:
     try:
-        return float(str(v).replace(",", "").strip())
+        f = float(str(v).replace(",", "").strip())
     except (ValueError, AttributeError):
         return None
+    return f if math.isfinite(f) else None
 
 
 def number(v: float) -> str:
@@ -219,6 +224,76 @@ class PandasKit:
             if w:
                 self.warnings.append(f"{who}: {w}" if who else w)
         return out
+
+    # --- 작업 폴더 정리: 원본 옆에 폴더가 쌓이지 않게 (0.1.1) -------------------------------------------------
+    def current(self) -> Optional[str]:
+        """bom-kit 몫의 pandas-kit이 지금 쓰는 작업 폴더 (멈춘 실행이 만든 폴더를 찾을 때)."""
+        try:
+            with open(os.path.join(self.env["PANDAS_KIT_DATA_DIR"], "current.json"), encoding="utf-8") as f:
+                return json.load(f).get("work") or None
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def drop(folder: Optional[str], why: str) -> None:
+        """bom-kit이 만든 작업 폴더 지우기. pandas-kit 표시 파일이 있는 폴더만. 잡혀 있어 못 지우면 그대로 둠."""
+        if not folder or not os.path.isfile(os.path.join(folder, MARKER)):
+            return
+        try:
+            rt.retry_fs(lambda: shutil.rmtree(folder), attempts=3)
+            sys.stderr.write(f"[INFO] {why}: 작업 폴더를 지웠습니다 ({folder})\n")
+        except OSError as e:
+            sys.stderr.write(f"[WARN] {why}: 작업 폴더를 지우지 못해 그대로 둡니다 ({folder}, {type(e).__name__})\n")
+
+
+def _works_path() -> str:
+    return os.path.join(rt.get_data_dir(), "works.json")
+
+
+def _works() -> Dict[str, str]:
+    try:
+        with open(_works_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _remember(key: str, folder: str) -> None:
+    data = _works()
+    data.pop(key, None)
+    data[key] = folder
+    for k in list(data)[:-WORKS_MAX]:
+        del data[k]
+    try:
+        os.makedirs(rt.get_data_dir(), exist_ok=True)
+        text = json.dumps(data, ensure_ascii=False)
+        rt.retry_fs(lambda: open(_works_path(), "w", encoding="utf-8").write(text))
+    except OSError:
+        pass                                   # 기억하지 못해도 결과는 그대로 (다음에 폴더 하나가 더 남을 뿐)
+
+
+def _file_key(path: Optional[str]) -> str:
+    return os.path.normcase(os.path.abspath(str(path))) if path else ""
+
+
+def run_once(key_parts: List[Any], body: Any) -> Dict[str, Any]:
+    """작업 하나: 멈춘 실행이 만든 빈 작업 폴더는 지우고, 같은 명령(같은 파일·시트·범위·열·찾는 말)을 다시 실행했으면
+    앞 실행의 작업 폴더를 지움 (새 결과가 같은 내용이라 폴더만 쌓임). 다른 파일·다른 --find의 결과 폴더는 그대로 둠."""
+    key = json.dumps([str(x or "") for x in key_parts], ensure_ascii=False)
+    pk = PandasKit()
+    pk.run(["new"])
+    try:
+        out = body(pk)
+    except (rt.InputError, FileNotFoundError):
+        pk.drop(pk.current(), "멈춘 실행")
+        raise
+    before = _works().get(key)
+    if before and out.get("work") and _file_key(before) != _file_key(out["work"]):
+        pk.drop(before, "같은 명령의 앞 실행")
+    if out.get("work"):
+        _remember(key, out["work"])
+    return out
 
 
 def _plain_warning(text: str) -> str:
@@ -360,8 +435,11 @@ def summarize(rows: List[Dict[str, str]], ocol: str, ncol: str, order: Optional[
 
 
 def cmd_diff(a: Any) -> Dict[str, Any]:
-    pk = PandasKit()
-    pk.run(["new"])
+    return run_once(["diff", _file_key(a.old), _file_key(a.new), a.sheet, a.old_sheet, a.new_sheet, a.old_range, a.new_range,
+                     a.level, a.part], lambda pk: _diff(a, pk))
+
+
+def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
     o_csv, o_read = read_bom(pk, a.old, "old", "옛 판", a.old_sheet or a.sheet, a.old_range)
     n_csv, n_read = read_bom(pk, a.new, "new", "새 판", a.new_sheet or a.sheet, a.new_range)
     o, n = _paths(o_csv, a.level, a.part, "옛 판"), _paths(n_csv, a.level, a.part, "새 판")
@@ -410,8 +488,11 @@ def cmd_diff(a: Any) -> Dict[str, Any]:
 # ==============================================================================
 
 def cmd_where_used(a: Any) -> Dict[str, Any]:
-    pk = PandasKit()
-    pk.run(["new"])
+    return run_once(["where-used", _file_key(a.file), a.sheet, a.range, a.level, a.part, a.qty, a.find.strip().lower()],
+                    lambda pk: _where_used(a, pk))
+
+
+def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
     bom_csv, read = read_bom(pk, a.file, "bom", "BOM", a.sheet, a.range)
     path, rows, cols = load_csv(bom_csv)
     pcol = find_col(cols, PART_NAMES, a.part, "품번", "--part")

@@ -60,3 +60,54 @@ def test_pandas_kit_state_of_the_user_is_not_touched(env, tmp_path):
     code, _ = bom("where-used", "--file", files / "MBOM_DR200_v2.xlsx", "--find", "000125")
     assert code == 0
     assert ok(env, "show")["work"] == mine and ok(env, "show")["table"] == "mine"
+
+
+def test_skill_versions_match_the_tool():
+    import _bom_runtime as rt
+    for skill in ("mbom-diff", "where-used"):
+        with open(os.path.join(AIKIT, ".opencode", "skills", skill, "SKILL.md"), encoding="utf-8") as f:
+            assert f'version: "{rt.VERSION}"' in f.read(), skill
+
+
+def test_misspelt_command_name_gives_candidates(env):
+    code, out = bom("dif", "--old", "a.xlsx", "--new", "b.xlsx")
+    assert code == 2 and "'dif' 명령은 없습니다. [후보] 1) diff" in out["message"]
+    assert out["confirm_commands"][0]["command"].split("bom.py ", 1)[1].startswith("diff --old")
+
+
+def _work_folders(folder):
+    return sorted(n for n in os.listdir(folder) if os.path.isdir(os.path.join(folder, n)))
+
+
+def test_work_folders_do_not_pile_up_next_to_the_original(env, tmp_path):
+    """원본 옆 작업 폴더 (0.1.1): 멈춘 실행의 빈 폴더는 지우고, 같은 명령을 다시 실행하면 앞 실행의 폴더를 지움.
+    다른 --find의 결과 폴더는 그대로 둠 (output_file을 나중에 열 수 있게)."""
+    from bk_helpers import make_samples
+    files = make_samples(tmp_path / "mbom")
+    f = files / "MBOM_DR200.xlsx"
+    code, out = bom("where-used", "--file", f, "--find", "000125", "--sheet", "Routing")      # 수량 열이 없어 멈춤
+    assert code == 1 and "[후보]" in out["message"] and _work_folders(files) == []
+    code, out = bom("where-used", "--file", f, "--find", "000125", "--sheet", "없는시트")
+    assert code == 1 and _work_folders(files) == []
+    code, first = bom("where-used", "--file", f, "--find", "000125")
+    assert code == 0 and len(_work_folders(files)) == 1 and os.path.isfile(first["output_file"])
+    code, again = bom("where-used", "--file", f, "--find", "000125")                          # 같은 명령 다시
+    assert code == 0 and again["count"] == first["count"] and len(_work_folders(files)) == 1
+    assert os.path.isfile(again["output_file"]) and not os.path.exists(first["work"])
+    code, other = bom("where-used", "--file", f, "--find", "나사")                            # 다른 것을 찾음: 앞 결과는 그대로
+    assert code == 0 and len(_work_folders(files)) == 2 and os.path.isfile(again["output_file"])
+    code, d1 = bom("diff", "--old", files / "MBOM_DR200_v2.xlsx", "--new", files / "MBOM_DR200_v2_mod.xlsx")
+    code, d2 = bom("diff", "--old", files / "MBOM_DR200_v2.xlsx", "--new", files / "MBOM_DR200_v2_mod.xlsx")
+    assert code == 0 and d2["counts"] == d1["counts"] and len(_work_folders(files)) == 3
+    assert all(os.path.isfile(c["command"].split("--file ", 1)[1].split(" --bg")[0].strip("'\"")) for c in d2["confirm_commands"])
+
+
+def test_level_that_is_not_a_finite_number_is_a_skipped_row(env, tmp_path):
+    """Level 칸의 'inf', 'nan' 글자가 내부 오류(OverflowError)를 냈음 (0.1.1): 보지 않은 행으로 알림."""
+    import bom as bom_mod
+    assert bom_mod.level_of("inf") is None and bom_mod.level_of("nan") is None and bom_mod.level_of("2.0") == 2
+    assert bom_mod.qty_of("inf") is None and bom_mod.qty_of("1,000") == 1000
+    p = tmp_path / "e.csv"
+    p.write_text("Level,Part Number,품명,Qty\n0,TOP,제품,1\n1,A,조립,2\ninf,B,볼트,3\n2,C,볼트,4\n", encoding="utf-8")
+    code, out = bom("where-used", "--file", p, "--find", "볼트")
+    assert code == 0 and out["count"] == 1 and any("보지 않았습니다" in w for w in out["warnings"])

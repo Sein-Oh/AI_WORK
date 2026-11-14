@@ -1,4 +1,4 @@
-CLI 도구 2종(ml-kit, office-cli) 패키지 설치 명령 (WinPython)
+CLI 도구(ml-kit, office-cli, pandas-kit, bom-kit) 패키지 설치 명령 (WinPython)
 버전은 AGENTS.md "사용자 환경" 표 기준. 모든 PC에 같은 버전을 설치한다 (ml-kit 모델(joblib)은 버전에 민감).
 
 1. WinPython 활성화
@@ -29,6 +29,7 @@ python -c "import pandas, sklearn, scipy, openpyxl, docx, pptx, matplotlib, pymu
 
 참고
 - 쓰는 곳: ml-kit = pandas, scikit-learn, scipy, numpy, joblib / office-cli = pywin32, python-pptx, pymupdf, olefile
-  / 둘 다 = openpyxl, python-docx, matplotlib / pytest = AIKIT/dev 테스트용.
+  / 둘 다 = openpyxl, python-docx, matplotlib / pandas-kit = pandas, openpyxl, matplotlib, pywin32 (위 목록에 모두 있음)
+  / bom-kit = 표준 라이브러리만 (pandas-kit을 실행해서 씀) / pytest = AIKIT/dev 테스트용.
 - 이미 같은 버전이 있으면 "Requirement already satisfied"로 넘어간다. 다른 버전이 있으면 표 버전으로 바뀐다.
 - 명령은 python -m pip 만 쓴다 (py, python3, 단독 pip 금지).

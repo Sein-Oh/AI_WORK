@@ -267,9 +267,22 @@ def test_select_without_file_or_from_stops_and_gives_full_commands(env, monkeypa
     assert "저장하지 않은 문서 통합 문서1" in out["message"] and recommended(out["message"]) == ["select", "--file", path]
     monkeypatch.setattr(rt, "open_workbooks", lambda: [])
     ok(env, "select", "--file", path, "--name", "df1")
+    # 지금 표가 있어도 고를 조건·열이 없으면 '지금 표에서 고르기'를 권하지 않음 (0.2.9: select --from df1은 표를 복사할 뿐인데
+    # 경량 모델이 그것을 실행하고 열린 엑셀을 읽었다고 답할 수 있었음)
     out = select_alone([])
-    assert recommended(out["message"]) == ["select", "--from", "df1"]
+    assert "읽을 파일 경로를 물어" in out["message"] and "[추천]" not in out["message"]
     out = select_alone([{"path": other, "name": "B2.xlsx", "saved": True}])
+    assert recommended(out["message"]) == ["select", "--file", other]
+    # 조건이 있으면 지금 표에서 고르는 명령을 줌
+    monkeypatch.setattr(rt, "open_workbooks", lambda: [])
+    with pytest.raises(SystemExit):
+        pk.main(["select", "--where", "Level=1"])
+    out = json.loads(capsys.readouterr().out)
+    assert recommended(out["message"]) == ["select", "--where", "Level=1", "--from", "df1"]
+    monkeypatch.setattr(rt, "open_workbooks", lambda: [{"path": other, "name": "B2.xlsx", "saved": True}])
+    with pytest.raises(SystemExit):
+        pk.main(["select", "--where", "Level=1"])
+    out = json.loads(capsys.readouterr().out)
     assert "[후보] 1) 지금 표 df1에서 고르기 2) Excel에 열린 B2.xlsx 읽기" in out["message"]
 
 
@@ -854,3 +867,20 @@ def test_hidden_rows_can_be_left_out_and_group_totals_stay_whole(env):
     assert ok(env, "show", "--from", "g")["rows"][0]["Qty 합계"] == 13           # 13.0이 아니라 13
     without = ok(env, *command_args(warn.split("빼고 읽으려면: ", 1)[1]))      # 경고가 준 전체 명령 (--name a 그대로라 a를 새로 만듦)
     assert without["count"] == 2 and without["table"] == "a"
+
+
+def test_number_column_with_a_value_that_is_not_a_number(env):
+    """숫자 열에 숫자가 아닌 값으로 크기를 비교하면 글자 비교가 되어 말없이 0건이었음 (0.2.9): 멈추고 알림. 같음은 경고."""
+    p = make_bom(env["dir"] / "BOM.xlsx")
+    ok(env, "select", "--file", p, "--name", "a")
+    code, out = run(env, "select", "--from", "a", "--where", "Qty>abc")
+    assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "숫자 열" in out["message"]
+    out = ok(env, "select", "--from", "a", "--where", "Qty=abc")
+    assert out["count"] == 0 and any("숫자가 아니라 글자로 비교" in w for w in out["warnings"])
+    assert ok(env, "select", "--from", "a", "--where", "Qty>=3")["count"] == 2
+
+
+def test_misspelt_command_name_gives_candidates(env):
+    code, out = run(env, "selct", "--file", "x.xlsx")
+    assert code == 2 and "'selct' 명령은 없습니다. [후보] 1) select" in out["message"]
+    assert command_args(out["confirm_commands"][0]["command"]) == ["select", "--file", "x.xlsx"]

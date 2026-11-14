@@ -64,6 +64,6 @@ def test_skill_md_is_one_command_and_short():
         raw = f.read().replace(b"\r\n", b"\n")
     assert len(raw) <= 8192
     text = raw.decode("utf-8")
-    assert "name: where-used" in text and 'version: "0.2.0"' in text
+    assert "name: where-used" in text
     assert text.count(r'python "C:\AIKIT\bom-kit\bom.py" where-used --file') == 1 and "pandas_kit.py" not in text
     assert "mbom-diff" in text                                           # 두 판 비교는 그쪽이라고 알려 줌

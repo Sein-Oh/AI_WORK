@@ -99,7 +99,8 @@ def _frontmatter(path):
 
 
 def test_skill_layout():
-    assert sorted(n for n in os.listdir(SKILLS_DIR) if n.endswith("-kit")) == sorted(SKILL_NAMES)
+    # 다른 도구의 스킬(pandas-kit)과 사용자가 만든 스킬도 이름이 -kit으로 끝날 수 있어, office-cli 스킬이 모두 있는지만 봄
+    assert set(SKILL_NAMES) <= set(os.listdir(SKILLS_DIR))
     for name, path in SKILL_FILES.items():
         assert os.listdir(os.path.dirname(path)) == ["SKILL.md"], name          # 스킬 폴더에는 SKILL.md만
     assert not os.path.exists(os.path.join(TOOL_DIR, "SKILL.md"))               # 남으면 옛 통합 스킬이 다시 쓰임
