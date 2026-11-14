@@ -801,3 +801,38 @@ def test_thousands_separator_currency_and_text_dates(env):
     rows = [("날짜", "값"), ("05/01/2026", 1), ("06/02/2026", 2), ("07/03/2026", 3)]   # 뜻이 둘인 날짜는 글자 그대로
     out2 = ok(env, "select", "--file", _sheet(env["dir"] / "amb.xlsx", rows), "--name", "c")
     assert {c["name"]: c["kind"] for c in out2["columns"]}["날짜"] == "글자"
+
+
+def test_a_blank_row_inside_the_table_asks_which_range(env):
+    # 집 PC 2026-11-14: 표 가운데 빈 행(18·49행) 때문에 BOM 111행 중 69행만 읽고 50행을 머리글로 삼았음
+    rows = [("Level", "Part Number", "Qty")] + [(1, f"{i:04d}", i) for i in range(1, 7)]
+    p = _sheet(env["dir"] / "split.xlsx", rows)
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    ws.insert_rows(5)                                                   # 표 가운데 빈 행
+    wb.save(p)
+    code, out = run(env, "select", "--file", p, "--name", "a")
+    assert code == 1 and out["error_type"] == "needs_user_decision"
+    assert "[후보] 1) 빈 행까지 한 표로 (A1:C8, 빈 행 빼고 6행)" in out["message"]
+    assert "2) A1:C4만 (3행)" in out["message"] and "3) A6:C8만 (2행)" in out["message"]   # 덩어리마다 첫 줄은 머리글
+    whole = ok(env, *command_args(out["confirm_commands"][0]["command"]))
+    assert whole["count"] == 6 and any("범위 안의 빈 행 1개는 뺐습니다" in w for w in whole["warnings"])
+    assert [r["Part Number"] for r in ok(env, "show")["rows"]][:2] == ["0001", "0002"]
+    lower = ok(env, *command_args(out["confirm_commands"][2]["command"]))
+    assert lower["count"] == 2                                          # 고른 덩어리만 읽기도 됨
+    small = [("Level", "Part Number", "Qty")] + [(1, f"{i:04d}", i) for i in range(1, 7)]
+    p2 = _sheet(env["dir"] / "memo.xlsx", small)
+    wb2 = openpyxl.load_workbook(p2)
+    wb2.active["A10"] = "메모"                                          # 표 아래 작은 메모는 묻지 않음 (지금까지와 같게)
+    wb2.save(p2)
+    out2 = ok(env, "select", "--file", p2, "--name", "b")
+    assert out2["count"] == 6 and any("빈 행 아래" in w for w in out2["warnings"])
+
+
+def test_a_code_like_p100_is_not_called_a_number_with_a_symbol(env):
+    # 집 PC 2026-11-14: Work Center(MC-03), Plant(P100)까지 "숫자에 기호가 붙어"로 경고했음
+    rows = [("Work Center", "Plant", "단가"), ("MC-03", "P100", "₩1,500"),
+            ("ASM-01", "P100", "₩12,000"), ("GB-02", "P200", "₩9,900")]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "code.xlsx", rows), "--name", "a")
+    sym = [w for w in out.get("warnings", []) if "기호가 붙어" in w]
+    assert len(sym) == 1 and "단가(C)" in sym[0] and "Work Center" not in sym[0] and "Plant" not in sym[0]

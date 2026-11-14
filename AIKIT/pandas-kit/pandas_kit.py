@@ -47,7 +47,8 @@ _LETTERS = re.compile(r"^[A-Z]{1,3}$")
 _NAME = re.compile(r"^[^\W\d][\w]*$")
 _NUM_TEXT = re.compile(r"^-?\d+(\.\d+)?$")
 _NUM_COMMA = re.compile(r"^-?\d{1,3}(,\d{3})+(\.\d+)?$")        # 1,200 (회사 파일에 흔한 천 단위 쉼표)
-_NUM_SYMBOL = re.compile(r"^[^\d\s]{1,2}\s*-?\d[\d,]*(\.\d+)?$|^-?\d[\d,]*(\.\d+)?\s*[^\d\s.]{1,4}$")   # W1,500, 12 kg
+_NUM_SYMBOL = re.compile(r"^[\u20a9$\u20ac\u00a5\u00a3]\s*-?\d[\d,]*(\.\d+)?$"      # 통화 기호가 앞에
+                         r"|^-?\d[\d,]*(\.\d+)?\s*[^\d\s.\-]{1,4}$")     # 단위가 뒤에 (12 kg, 18%). P100, MC-03 같은 코드는 아님
 _TEXT_DATE = re.compile(r"^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})$")                                       # 2026.01.05
 _LEADING_ZERO = re.compile(r"^-?0\d")
 _DATE_TEXT = re.compile(r"^\d{4}-\d{1,2}-\d{1,2}( \d{1,2}:\d{2}(:\d{2})?)?$")      # 날짜 열의 조건 값: 연-월-일 (시각은 붙여도 됨)
@@ -648,6 +649,10 @@ def convert_column(values: List[Any]) -> Tuple[List[Any], str, str]:
     return [text(v) for v in values], "object", "글자"
 
 
+def _part_span(rows: List[Tuple[int, List[Any]]], part: List[int]) -> set:
+    return {j for i in part for j, v in enumerate(rows[i][1]) if not _empty(v)}
+
+
 def _pick_block(rows: List[Tuple[int, List[Any]]], filled_n: List[int], explicit_end: bool) -> Tuple[Optional[int], List[int]]:
     """Header row index of the table and the Excel rows of other content above it that has two or more cells in a row.
     Content parts separated by fully empty rows; the table is the biggest part (columns of its header x rows), the first on a tie.
@@ -674,7 +679,31 @@ def _pick_block(rows: List[Tuple[int, List[Any]]], filled_n: List[int], explicit
     part, head = best
     above = [rows[i][0] for p in parts if p[-1] < part[0] for i in p if filled_n[i] >= 1]     # 한 칸짜리 제목 줄도 셈
     above += [rows[i][0] for i in part if i < head and filled_n[i] >= 1]
+    _ask_when_split(rows, parts, part, head)
     return head, above
+
+
+def _ask_when_split(rows: List[Tuple[int, List[Any]]], parts: List[List[int]], part: List[int], head: int) -> None:
+    """표 가운데 빈 행이 있으면 표가 갈려 한 덩어리만 읽힌다 (집 PC 2026-11-14: 18·49행이 비어 BOM 111행 중 69행만 읽고
+    50행을 머리글로 삼았음). 열이 거의 같은 다른 덩어리가 크면 어디까지가 한 표인지 도구가 정하지 않고 [후보]로 묻는다."""
+    mine, my_rows = _part_span(rows, part), part[-1] - head + 1
+
+    def area(idx: List[int], cols: List[int]) -> str:
+        return f"{col_letter(cols[0] + 1)}{rows[idx[0]][0]}:{col_letter(cols[-1] + 1)}{rows[idx[-1]][0]}"
+
+    same = [p for p in parts if len(mine & _part_span(rows, p)) >= max(len(mine), len(_part_span(rows, p))) / 2]
+    others = sum(len(p) for p in same if p is not part)
+    if len(same) < 2 or others < max(3, my_rows / 3):
+        return
+    all_cols = sorted(set().union(*(_part_span(rows, p) for p in same)))
+    whole = list(range(same[0][0], same[-1][-1] + 1))
+    choices = [f"빈 행까지 한 표로 ({area(whole, all_cols)}, 빈 행 빼고 {sum(len(p) for p in same) - 1}행)"]
+    argv = [argv_setting("--range", area(whole, all_cols))]
+    for p in same[:3]:
+        cols = sorted(_part_span(rows, p))
+        choices.append(f"{area(p, cols)}만 ({len(p) - 1}행)")
+        argv.append(argv_setting("--range", area(p, cols)))
+    raise rt.ask(choices, argv, f"빈 행으로 나뉜 덩어리가 {len(same)}개라 읽을 범위")
 
 
 def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tuple[Any, Dict[str, Any], List[str]]:
