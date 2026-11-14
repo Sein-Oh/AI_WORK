@@ -1,10 +1,10 @@
 ---
 name: pandas-kit
-description: 엑셀·CSV 표를 단계별로 고르고 비교한다 (pandas_kit.py, 원본은 그대로). 파일·시트·범위에서 조건으로 행을 골라 이름 붙인 표(df1, df2) 만들기, 표 보기(엑셀 행 번호와 함께), 두 판 비교(추가·삭제·바뀐 칸), 짝 맞춰 붙이기, 한쪽에만 있는 행, 위아래로 잇기, 값별 행 수·합계, 정렬, 차트 그림(막대·선·산점·원·히스토그램·상자), 되돌리기, 새 파일로 저장. "BOM 두 판 비교", "레벨 1만 골라", "A에만 있는 품번", "업체별 수량 합계", "수량 큰 순", "업체별 수량 차트"에 사용. BOM 분석 같은 업무 판단은 이 명령들을 조합한 스킬이 한다. 원본에 칠하기·메모는 excel-kit.
+description: 엑셀·CSV 표를 단계별로 고르고 비교한다 (pandas_kit.py, 원본은 그대로). 파일·시트·범위에서 조건으로 행을 골라 이름 붙인 표(df1, df2) 만들기, 표 보기(엑셀 행 번호와 함께), 두 판 비교(추가·삭제·바뀐 칸), 짝 맞춰 붙이기, 한쪽에만 있는 행, 위아래로 잇기, 값별 행 수·합계·평균, 열 요약, 서로 다른 값, 계산한 열, 큰 순 몇 행, 빈 칸 채우기·빼기, 겹친 행 빼기, 정렬, 차트 그림(막대·선·산점·원·히스토그램·상자), 되돌리기, 새 파일로 저장. "BOM 두 판 비교", "레벨 1만 골라", "A에만 있는 품번", "업체별 수량 합계", "수량 큰 순", "업체별 수량 차트"에 사용. BOM 분석 같은 업무 판단은 이 명령들을 조합한 스킬이 한다. 원본에 칠하기·메모는 excel-kit.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "0.2.12"
+  version: "0.3.0"
   platform: windows
 ---
 
@@ -28,7 +28,12 @@ metadata:
 | 두 판 비교 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" diff --old df1 --new df2 --on "<키 열1>,<키 열2>"` |
 | 짝 맞춰 붙이기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" join --left df1 --right df2 --on "<키 열>"` (이름이 다르면 `--on "<왼쪽 열>=<오른쪽 열>"`, 왼쪽 행을 모두 남기려면 `--keep-left`) |
 | 한쪽에만 있는 행 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" only --left df1 --right df2 --on "<키 열>"` |
-| 값별 행 수·합계 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" group --from df1 --by "<열>" --sum "<숫자 열>"` (행 수만이면 `--sum` 없이) |
+| 값별 행 수·합계 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" group --from df1 --by "<열>" --sum "<숫자 열>"` (행 수만이면 `--sum` 없이. 평균 `--mean`, 최소 `--min`, 최대 `--max`, 빈 칸 아닌 개수 `--count`, 종류 수 `--nunique`도 같은 모양) |
+| 열 요약 (평균·최소·최대 등) | `python "C:\AIKIT\pandas-kit\pandas_kit.py" describe --from df1` |
+| 서로 다른 값과 개수 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" unique --from df1 --columns "<열>"` |
+| 계산한 열 더하기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" calc --from df1 --expr "<새 열>=<식>"` (식은 열 이름, 숫자, `+ - * /`, 괄호. 공백이 든 열은 `[Unit Price]`. 예: `"금액=Qty*[Unit Price]"`, 여러 개는 `;`) |
+| 큰 순 몇 행 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" top --from df1 --by "<숫자 열>" --n 10` (작은 순 `--asc`) |
+| 빈 칸을 위 값으로 채우기 (병합 칸 정리) | `python "C:\AIKIT\pandas-kit\pandas_kit.py" fillna --from df1 --columns "<열>" --down` (정한 값으로는 `--down` 대신 `--value "<값>"`) |
 | 정렬 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" sort --from df1 --by "<열>"` (큰 것부터 `--desc`) |
 | 위아래로 잇기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" stack --tables "df1,df2"` |
 | 되돌리기 (한 단계) | `python "C:\AIKIT\pandas-kit\pandas_kit.py" undo` |
@@ -39,7 +44,8 @@ metadata:
 - `select`에는 `--file`(파일 읽기)이나 `--from`(만든 표에서 고르기)을 꼭 쓴다. 사용자가 "열린 엑셀"이라고만 하면 둘 다 빼고 실행한다: 도구가 열린 통합문서를 읽는 전체 명령을 `[추천]`이나 `[후보]`로 준다. 저장 안 된 문서는 읽지 않으니 사용자에게 저장해 달라고 한다.
 - 표는 도구가 찾는다 (빈 행으로 나뉜 내용 중 가장 큰 것, 그 안에서 칸이 둘 이상 찬 첫 행이 머리글. 표 가운데 빈 행은 건너뛰고 한 표로 읽고 `warnings`로 알린다). 찾은 범위를 preview에 적는다. 틀렸다고 하면 `--range`를 준다.
 - 열은 머리글 이름이나 엑셀 열 글자(`D`)로 준다. 품번 같은 값은 글자 그대로다 (`0102`).
-- 조건에 `엑셀 행`을 쓸 수 있다: `--where "엑셀 행!=9"` (숨긴 행 빼기). 조건 연산자: `=`, `!=`, `>`, `<`, `>=`, `<=`, `~`(포함), `!~`(포함 안 함). 날짜는 `2026-12-31`처럼 연-월-일로, 품번·코드는 적힌 그대로(`000125`) 쓴다. 빈 칸은 `"비고="`, 빈 칸 아님은 `"비고!="`. `"Type!=RAW|CONS"`는 RAW도 CONS도 아닌 행.
+- 조건에 `엑셀 행`을 쓸 수 있다: `--where "엑셀 행!=9"` (숨긴 행 빼기). 조건 연산자: `=`, `!=`, `>`, `<`, `>=`, `<=`, `~`(포함), `!~`(포함 안 함), `^=`(로 시작), `$=`(로 끝). 날짜는 `2026-12-31`처럼 연-월-일로, 품번·코드는 적힌 그대로(`000125`) 쓴다. 빈 칸은 `"비고="`, 빈 칸 아님은 `"비고!="`. `"Type!=RAW|CONS"`는 RAW도 CONS도 아닌 행.
+- 같은 모양의 명령 (앞부분은 표와 같음): `dropna --from df1 --columns "<열>"`(빈 칸인 행 빼기), `drop-duplicates --from df1 --columns "<열>"`(같은 행은 하나만), `rename --from df1 --columns "Qty=수량"`(열 이름 바꾸기).
 - `diff`의 `--on`은 행마다 달라야 한다 (예: `"Parent,Part Number"`). 같은 키가 여러 행이면 도구가 멈추고 알린다.
 - 결과의 `엑셀 행`, `df1 행`은 원본 파일의 행 번호다. 사용자에게 알릴 때 그대로 쓴다.
 - 지난 작업으로 돌아가려면 명령 끝에 `--work "<작업 폴더>"`를 붙인다 (결과의 `work` 값). 그 뒤 명령도 그 작업 폴더의 표를 쓴다 (바뀌었으면 preview에 나온다).

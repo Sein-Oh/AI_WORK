@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-VERSION = "0.2.12"
+VERSION = "0.3.0"
 TOOL_NAME = "pandas-kit"
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_ENV = "PANDAS_KIT_DATA_DIR"
@@ -388,6 +388,9 @@ SAME_MEANING: Dict[str, List[str]] = {
     "--output": ["--save"], "--out": ["--save"], "--save-as": ["--save"], "--filter": ["--where"], "--query": ["--where"],
     "--base": ["--old"], "--before": ["--old"], "--after": ["--new"],
     "--first": ["--left"], "--second": ["--right"],
+    "--expression": ["--expr"], "--formula": ["--expr"], "--subset": ["--columns"], "--ffill": ["--down"],
+    "--index": ["--rows"], "--row": ["--rows"],
+    "--ascending": ["--asc"], "--descending": ["--desc"], "--avg": ["--mean"], "--average": ["--mean"],
     "-f": ["--file"], "-o": ["--save"], "-w": ["--where"], "-n": ["--name"],
 }
 NO_FUZZY_OPTIONS = {"--overwrite", "--help"}
