@@ -109,8 +109,8 @@ def test_results_stay_in_one_result_folder_and_work_folders_are_removed(env, tmp
     assert all(os.path.isfile(d["output_file"]) and os.path.isfile(d["changes_file"]) for d in (d1, d2, d3))
     assert sorted(_work_folders(files)) == ["MBOM_DR200_bom", "MBOM_DR200_v2_bom"]
     names = sorted(os.listdir(files / "MBOM_DR200_v2_bom"))
-    assert len(names) == 1 + 3 * 5 and ".created_by_bom-kit" in names
-    assert all(_re.fullmatch(r"diff_(MBOM_DR200_v2_mod|MBOM_DR200)" + stamp + r"_(요약\.txt|변경내용\.csv|칠할칸_(옛판|새판)\.csv|기록\.json)", n)
+    assert len(names) == 1 + 3 * 6 and ".created_by_bom-kit" in names
+    assert all(_re.fullmatch(r"diff_(MBOM_DR200_v2_mod|MBOM_DR200)" + stamp + r"_(요약\.txt|변경내용\.csv|칠할칸_(옛판|새판)\.csv|기록\.json|비교결과\.xlsx)", n)
                for n in names if n != ".created_by_bom-kit"), names
     stem = d1["output_file"][:-len("_요약.txt")]
     paint = [command_args(c["command"]) for c in d1["confirm_commands"]]                       # 칠하는 명령은 결과 폴더의 파일

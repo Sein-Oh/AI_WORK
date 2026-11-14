@@ -8,8 +8,15 @@
 - 상위 행 2개(Level 1 기어박스 조립, Level 2 스테이터 조립)만 지웠는데 하위 수십 행이 다른 상위 아래로 붙어 "추가 38건, 삭제 39건"이던 것:
   지운 상위의 하위가 새 판에서 다른 상위 아래에 같은 모양으로 있으면 `[상위 삭제]` 한 줄로 묶고 하위는 세지도 칠하지도 않는다
   (사용자 결정 2026-11-14). 이 예는 "상위 삭제 2건, 추가 3건, 삭제 2건"(실제 변경과 같음). 같은 상위 아래 순서만 바뀐 것은 찾지 않는다(사용자 결정).
-- 두 판 모두 표 안에 빈 행이 있으면 범위를 옛 판, 새 판 한 번씩 두 번 묻던 것: 한 번에 묻고 1번은 두 판 모두 한 표로.
-- 시험 `test_a_removed_parent_is_one_line_and_its_children_are_not_painted`, `test_both_versions_with_blank_rows_ask_the_range_once`.
+- 표 안에 빈 행이 있으면 옛 판, 새 판 한 번씩 범위를 묻던 것: 묻지 않고 빈 행까지 한 표로 읽고 `warnings`로 알림 (사용자 결정 2026-11-14).
+  where-used도 같음.
+
+### 기능
+- 비교 결과 엑셀 파일 (사용자 결정 2026-11-14): diff마다 결과 폴더에 `diff_<새 판>_<시각>_비교결과.xlsx`(`report_file`, preview 끝 줄).
+  요약 시트(preview와 같은 줄과 알림), 변경내용 시트(구분·품번·위치·열·옛 값·새 값·옛/새 엑셀 행·비고, 바뀐 칸은 칸마다 한 줄).
+  품번은 숫자처럼 보여도 글자, 엑셀 행 번호만 숫자. 표준 라이브러리로 씀(bom-kit은 openpyxl을 import하지 않음), 다시 열어 행 수 확인.
+- 시험 `test_a_removed_parent_is_one_line_and_its_children_are_not_painted`, `test_blank_rows_inside_the_table_are_read_as_one_table_without_asking`,
+  `test_the_comparison_is_saved_as_an_excel_file`.
 
 ## [0.2.0] - 2026-11-14
 

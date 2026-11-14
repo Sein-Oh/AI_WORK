@@ -84,18 +84,15 @@ def test_questions_come_back_as_full_bom_commands(env, files):
     assert fixed[0] == "diff" and fixed[fixed.index("--sheet") + 1] == "MBOM" and "--old-sheet" not in fixed
     code, out = bom(*fixed)                                         # 고른 명령으로 끝까지 됨
     assert code == 0 and out["counts"]["바뀐 칸"] == 8, out
-    wb = openpyxl.load_workbook(new)                                # 표 가운데 빈 행 둘: 어디까지가 표인지 묻기
+    wb = openpyxl.load_workbook(new)                                # 표 가운데 빈 행 둘: 묻지 않고 한 표로 (0.2.1)
     for r in (40, 80):
         for c in wb["MBOM"][r]:
             c.value = None
     split = files / "split.xlsx"
     wb.save(split)
     code, out = bom("diff", "--old", old, "--new", split)
-    assert code == 1 and out["message"].startswith("새 판을(를) 읽다가 멈췄습니다") and "[후보] 1) 빈 행까지 한 표로 (B6:R115" in out["message"]
-    first = command_args(out["confirm_commands"][0]["command"])
-    assert first[0] == "diff" and first[first.index("--new-range") + 1] == "B6:R115"
-    code, out = bom(*first)
     assert code == 0 and out["counts"]["삭제"] >= 2, out
+    assert "새 판: 표 안에 빈 행이 있어 빈 행까지 한 표로 읽었습니다 (B6:R115, 빈 행 빼고 107행)." in out["warnings"]
 
 
 def test_missing_column_is_asked_with_full_commands(env, files):
@@ -152,20 +149,35 @@ def test_a_removed_parent_is_one_line_and_its_children_are_not_painted(env, tmp_
     assert old_cells == ["B5:D5", "B9:D9"] and not any(k.startswith("원본 n.xlsx") for k in paint)   # 새 판은 칠할 것 없음
 
 
-def test_both_versions_with_blank_rows_ask_the_range_once(env, tmp_path):
-    """두 판 모두 표 안에 빈 행이 있으면 범위를 한 번에 묻고, 1번은 두 판 모두 한 표로 (집 PC 2026-11-14: 두 번 물었음)."""
-    from bk_helpers import command_args
+def test_blank_rows_inside_the_table_are_read_as_one_table_without_asking(env, tmp_path):
+    """표 안에 빈 행이 있으면 묻지 않고 빈 행까지 한 표로 읽고 알림 (사용자 결정 2026-11-14: 전에는 옛 판·새 판마다 [후보]로 물었음)."""
     rows = [(0, "TOP", 1), (1, "A", 1), (2, "A1", 2), (1, "B", 1), (2, "B1", 2), (2, "B2", 1), (2, "B3", 1)]
     old = _bom_xlsx(tmp_path / "o.xlsx", rows, blank_after=(3,))
     new = _bom_xlsx(tmp_path / "n.xlsx", rows[:4] + [(2, "B1", 5)] + rows[5:], blank_after=(3,))
     code, d = bom("diff", "--old", old, "--new", new)
-    assert code == 1 and d["error_type"] == "needs_user_decision"
-    assert d["message"].startswith("옛 판과 새 판을 읽다가 멈췄습니다: 두 판 모두 빈 행으로 나뉜 덩어리가 있어")
-    assert "[후보] 1) 두 판 모두 빈 행까지 한 표로 (옛 판 B1:D9" in d["message"] and "2) 옛 판 B1:D4만" in d["message"]
-    first = command_args(d["confirm_commands"][0]["command"])
-    assert first[-4:] == ["--old-range", "B1:D9", "--new-range", "B1:D9"]
-    code, d = bom(*first)
-    assert code == 0 and d["lines"] == ["[바뀜] B1 (TOP/B 아래): Qty 2 -> 5 (옛 엑셀 행 7, 새 엑셀 행 7)"]
-    plain = _bom_xlsx(tmp_path / "p.xlsx", rows)                                 # 새 판은 빈 행 없음: 옛 판만 물음
-    code, d = bom("diff", "--old", old, "--new", plain)
-    assert code == 1 and d["message"].startswith("옛 판을(를) 읽다가 멈췄습니다") and "두 판 모두" not in d["message"]
+    assert code == 0 and d["verified"], d
+    assert d["lines"] == ["[바뀜] B1 (TOP/B 아래): Qty 2 -> 5 (옛 엑셀 행 7, 새 엑셀 행 7)"]
+    for who in ("옛 판", "새 판"):
+        assert f"{who}: 표 안에 빈 행이 있어 빈 행까지 한 표로 읽었습니다 (B1:D9, 빈 행 빼고 7행)." in d["warnings"]
+    assert not any("범위 안의 빈 행" in w for w in d["warnings"])                       # 같은 알림을 두 번 하지 않음
+    code, w = bom("where-used", "--file", old, "--find", "B3")                          # where-used도 같음
+    assert code == 0 and w["count"] == 1 and any("빈 행까지 한 표로" in x for x in w["warnings"])
+
+
+def test_the_comparison_is_saved_as_an_excel_file(env, tmp_path):
+    """비교 결과 엑셀 파일 (사용자 결정 2026-11-14): 요약 시트(preview와 같은 줄, 알림)와 변경내용 시트(한 줄에 한 변경).
+    품번은 숫자처럼 보여도 글자, 엑셀 행 번호는 숫자. bom-kit은 openpyxl 없이 씀 (시험에서만 openpyxl로 확인)."""
+    rows = [(0, "TOP", 1), (1, "100300", 1), (2, "000125", 4), (1, "B", 1), (2, "B1", 2)]
+    old = _bom_xlsx(tmp_path / "o.xlsx", rows)
+    new = _bom_xlsx(tmp_path / "n.xlsx", [rows[0], rows[1], (2, "000125", 6), rows[3]])
+    code, d = bom("diff", "--old", old, "--new", new)
+    assert code == 0 and d["verified"] and d["preview"].splitlines()[-1] == f"비교 결과 파일: {d['report_file']}"
+    assert os.path.basename(d["report_file"]).startswith("diff_n_") and d["report_file"].endswith("_비교결과.xlsx")
+    wb = openpyxl.load_workbook(d["report_file"])
+    assert wb.sheetnames == ["요약", "변경내용"]
+    summary = [r[0] for r in wb["요약"].iter_rows(min_row=2, values_only=True)]
+    assert summary[0] == d["preview"].splitlines()[0] and summary[1:1 + len(d["lines"])] == d["lines"]
+    table = list(wb["변경내용"].iter_rows(values_only=True))
+    assert table[0] == ("구분", "품번", "위치", "열", "옛 값", "새 값", "옛 엑셀 행", "새 엑셀 행", "비고")
+    assert ("바뀜", "000125", "TOP/100300", "Qty", "4", "6", 4, 4, None) in table
+    assert ("삭제", "B1", "TOP/B", None, None, None, 6, None, None) in table

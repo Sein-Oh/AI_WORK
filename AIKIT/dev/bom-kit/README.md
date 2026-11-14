@@ -46,8 +46,8 @@ BOM 업무 계산 도구입니다. pandas-kit(표를 고르고·비교하는 기
   지운 상위의 하위를 행 순서대로 같은 상대 경로(품번)의 추가 행과 짝지어, 절반 이상 짝이 맞으면 `[상위 삭제] <품번>: ... 그 하위 N행은
   새 판에서 <새 상위> 아래에 그대로 있음` 한 줄로 알리고(`counts`의 `상위 삭제`), 짝 맞은 하위는 추가·삭제로 세지도 칠하지도 않는다.
   짝이 없는 하위(그 안의 진짜 삭제·추가)는 따로 알린다. 같은 상위 아래 순서만 바뀐 것은 찾지 않는다.
-- 두 판 모두 표 안에 빈 행이 있어 범위를 물어야 하면 한 번에 묻는다: 1번은 두 판 모두 빈 행까지 한 표로(`--old-range`, `--new-range`),
-  나머지는 옛 판 덩어리만 (그 뒤 새 판은 따로 물음). 새 판에 빈 행이 없으면 전처럼 옛 판만 묻는다.
+- 표 안에 빈 행이 있으면 묻지 않고 빈 행까지 한 표로 읽고 `warnings`로 알린다 (사용자 결정 2026-11-14: BOM 가운데 빈 행은 표가 끝난 것이 아님).
+  다른 범위로 읽으려면 `--old-range`·`--new-range`(where-used는 `--range`). diff와 where-used가 같음.
 - 열 찾기: Level(`Level`, `레벨` 등), 품번(`Part Number`, `품번`, `자재번호` 등), 수량(`Qty`, `수량` 등), 품명·단위(있으면).
   못 찾거나 준 이름이 없으면 열들을 `[후보]`로, 고른 번호의 `confirm_commands`는 `--level`·`--part`·`--qty`를 넣은 전체 명령.
 - 두 판에서 같은 뜻의 열 이름이 다르면(옛 판 `Qty`, 새 판 `수량`) 짝지어 bom-kit이 비교합니다 (`warnings`, 이 열의 바뀐 칸은 칠할 칸 목록에 없음).
@@ -56,7 +56,7 @@ BOM 업무 계산 도구입니다. pandas-kit(표를 고르고·비교하는 기
 ## 명령
 | 명령 | 옵션 | 결과 |
 |---|---|---|
-| `diff` | `--old`, `--new`, `--sheet` (README에만: `--old-sheet`, `--new-sheet`, `--old-range`, `--new-range`, `--level`, `--part`) | 두 판을 읽고(pandas-kit select·export) 경로 계산, 경로 붙이기(join `엑셀 행`), `diff --on 경로`, 결과 export 뒤 `[대체 후보]`·`[추가]`·`[삭제]`·`[바뀜]` 줄과 옛·새 엑셀 행, `counts`, 끝 줄에 읽은 표. `output_file`(요약 txt), `changes_file`(변경내용 csv), `confirm_commands`(원본에 바뀐 칸 칠하기, office-cli, 사용자가 원할 때만). 0건은 "두 판이 같습니다" |
+| `diff` | `--old`, `--new`, `--sheet` (README에만: `--old-sheet`, `--new-sheet`, `--old-range`, `--new-range`, `--level`, `--part`) | 두 판을 읽고(pandas-kit select·export) 경로 계산, 경로 붙이기(join `엑셀 행`), `diff --on 경로`, 결과 export 뒤 `[대체 후보]`·`[추가]`·`[삭제]`·`[바뀜]` 줄과 옛·새 엑셀 행, `counts`, 끝 줄에 읽은 표. `output_file`(요약 txt), `changes_file`(변경내용 csv), `report_file`(비교 결과 엑셀: 요약 시트와 변경내용 시트, preview 끝 줄에 경로), `confirm_commands`(원본에 바뀐 칸 칠하기, office-cli, 사용자가 원할 때만). 0건은 "두 판이 같습니다" |
 | `history` | `--file` | 그 파일과 비교로 이어진 판들의 diff 기록(`diff_<새 판>_<시각>_기록.json`, 옛 판 옆 결과 폴더)을 시간순으로 `[비교] <시각> <옛 판> -> <새 판>: <그때의 건수>` 줄과 변경내용을 합친 `변경이력_<파일 이름>_<시각>.csv`(`output_file`, 그 파일의 결과 폴더). 파일이 그대로인 같은 비교는 마지막 것만. 비교 뒤 원본이 바뀌었거나 없으면 `warnings`. 0건은 `count: 0`과 "비교 기록이 없습니다" |
 | `where-used` | `--file`, `--find`, `--sheet` (README에만: `--range`, `--level`, `--part`, `--qty`) | BOM을 읽고 `--find`와 같은 품번(대소문자 무시) 또는 품명에 그 글자가 든 행마다 `[쓰임]` 줄(상위·제품 1대당 수량·경로·엑셀 행), `totals`(품번·단위별 곳 수와 합계), `output_file`(쓰인곳 csv). 0건은 `count: 0`과 "찾지 못했습니다" |
 
