@@ -19,8 +19,16 @@ pandas에서 자주 쓰는 메서드를 명령으로 (사용자 결정 2026-11-1
 - `top --from --by <숫자 열> --n <개수>`: 큰 순 앞 몇 행 (`--asc`면 작은 순, `--n` 생략은 10).
 - 시험 `tests/test_pandas_methods.py`: 명령마다 정상, 0건, 틀린 열 `[후보]`, 구분자 `[추천]`, 스냅샷을 지운 뒤 기록으로 다시 만들기.
 
+### 기능 (2차)
+- `dropna --from --columns`: 그 열 중 하나라도 빈 칸인 행을 뺌. 뺀 행 수와 엑셀 행을 preview에.
+- `fillna --from --columns`에 `--value "<값>"`(그 값으로, 열의 종류는 바꾸지 않음: 숫자 열에 글자는 거절) 또는 `--down`(바로 위 칸의 값으로, 병합 칸 정리).
+  `--down`에서 맨 위부터 빈 칸은 그대로 두고 `warnings`.
+- `drop-duplicates --from` (`--columns`, `--keep first|last`): 값이 같은 행은 하나만. 뺀 행 수와 엑셀 행을 preview에.
+- `rename --from --columns "Qty=수량,UoM=단위"`: 열 이름만 바꿈 (원본 열 글자는 그대로 따라감).
+- 같은 뜻 옵션 `[추천]`: `--subset` -> `--columns`, `--ffill` -> `--down`, `--expression` -> `--expr`, `--avg` -> `--mean`, `--ascending` -> `--asc` 등.
+
 ### 스킬
-- 명령 표에 `describe`, `unique`, `calc`, `top`과 `group`의 새 옵션, 조건 연산자 `^=` `$=`.
+- 명령 표에 `describe`, `unique`, `calc`, `top`, `fillna`와 `group`의 새 옵션, 조건 연산자 `^=` `$=`. `dropna`, `drop-duplicates`, `rename`은 한 줄로.
 
 ## [0.2.12] - 2026-11-14
 
@@ -227,7 +235,6 @@ pandas에서 자주 쓰는 메서드를 명령으로 (사용자 결정 2026-11-1
 - **pandas 메서드 명령 늘리기** (사용자 결정 2026-11-15, "가": pandas에서 자주 쓰는 메서드를 명령 하나씩, CLI지만 인터프리터처럼.
   pandas 코드를 짜게 하지 않는 원칙은 그대로, 새 명령 이름은 pandas 이름 그대로, 있는 `group`·`stack` 등은 그대로).
   모든 명령은 `--from` 필수, 결과는 새 표(`--name`), 엑셀 행 유지, 한국어 preview, 다시 읽어 VERIFIED, 구분자 규칙(`,` 이름 목록, `;` 조건·식, `|` 또는).
-  - 2차: `dropna --columns`, `fillna --columns --value`(위 값으로 `--down`, 병합 칸 정리), `drop-duplicates --columns`(`--keep first` 기본), `rename --columns "Qty=수량"`
   - 3차: `pivot --rows --cols --sum`(값 옵션은 group과 같음), `calc`의 `round`·`abs`
   - 검토(사용자와 정할 것): `~~`(대소문자 무시 포함), `Qty=1..10`(사이 값, 지금도 `Qty>=1;Qty<=10`), `cumsum`
   - 스킬이 8KB를 넘으면 작업별로 나눔 (나누는 방식은 사용자와 정함, 예: 읽기·고르기·비교 / 묶기·연산·정리)

@@ -213,3 +213,102 @@ def test_first_round_tables_are_rebuilt_from_the_record(t):
     for n, rows in before.items():
         out = ok(env, "show", "--from", n)
         assert out["rows"] == rows and any("작업 기록으로 다시 만듦" in r for r in out["recovered"]), n
+
+
+# ---------------------------------------------------------------------------
+# 2차: dropna, fillna, drop-duplicates, rename
+# ---------------------------------------------------------------------------
+
+def test_dropna_drops_rows_with_an_empty_cell(t):
+    env = t["env"]
+    out = ok(env, "dropna", "--from", "t", "--columns", "Unit Price", "--name", "d")
+    assert out["count"] == 5 and "Unit Price이(가) 빈 칸인 행 1개를 뺌: 엑셀 행 6" in out["preview"]
+    out = ok(env, "dropna", "--from", "t", "--columns", "Unit Price,Note", "--name", "d2")     # 하나라도 빈 칸이면 뺌
+    assert [r["엑셀 행"] for r in rows_of(env, "d2")] == [2, 4] and "행 4개를 뺌: 엑셀 행 3, 5, 6, 7" in out["preview"]
+    out = ok(env, "dropna", "--from", "t", "--columns", "Qty")                                # 뺄 행 없음
+    assert out["count"] == 6 and "행 0개를 뺌" in out["preview"]
+    assert ok(env, "dropna", "--from", "none", "--columns", "Qty")["count"] == 0
+    code, out = run(env, "dropna", "--from", "t", "--columns", "Not")
+    assert code == 1 and "[후보] 1) Note" in out["message"]
+    code, out = run(env, "dropna", "--from", "t", "--columns", "Qty;Note")
+    assert code == 1 and recommended(out["message"])[-1] == "Qty,Note"
+
+
+def test_fillna_with_a_value_keeps_the_kind_of_the_column(t):
+    env = t["env"]
+    out = ok(env, "fillna", "--from", "t", "--columns", "Unit Price,Note", "--value", "0", "--name", "f")
+    assert out["count"] == 6 and "빈 칸을 '0'(으)로 채움 (Unit Price 1칸, Note 3칸)" in out["preview"]
+    rows = rows_of(env, "f")
+    assert [r["Unit Price"] for r in rows] == [1.5, 0.5, 10, 0.5, 0, 2] and [r["Note"] for r in rows] == ["x", "0", "12", "0", "abc", "0"]
+    assert {c["name"]: c["kind"] for c in out["columns"]}["Unit Price"] == "숫자"
+    code, out = run(env, "fillna", "--from", "t", "--columns", "Unit Price", "--value", "없음")
+    assert code == 1 and "숫자 열이라" in out["message"]
+    code, out = run(env, "fillna", "--from", "t", "--columns", "Note")
+    assert code == 1 and "--value" in out["message"] and "--down" in out["message"]
+    code, out = run(env, "fillna", "--from", "t", "--columns", "Note", "--value", "x", "--down")
+    assert code == 1 and "함께 쓰지 않습니다" in out["message"]
+    code, out = run(env, "fillna", "--from", "t", "--columns", "Nte", "--value", "x")
+    assert code == 1 and "[후보] 1) Note" in out["message"]
+
+
+def test_fillna_down_fills_from_the_cell_above(env):
+    """병합 칸을 푼 표: 묶음 이름이 첫 행에만 있음. 맨 위부터 빈 칸은 채울 값이 없어 그대로."""
+    rows = [(None, "P1", 1), ("조립 A", "P2", 2), (None, "P3", None), (None, "P4", 4), ("조립 B", "P5", None), ("  ", "P6", 6)]
+    ok(env, "select", "--file", make_parts(env["dir"] / "m.xlsx", rows, ["Group", "Part", "Qty"]), "--name", "m")
+    out = ok(env, "fillna", "--from", "m", "--columns", "Group,Qty", "--down", "--name", "f")
+    assert "빈 칸을 위 값으로 채움 (Group 3칸, Qty 2칸)" in out["preview"]
+    rows = rows_of(env, "f")
+    assert [r["Group"] for r in rows] == [None, "조립 A", "조립 A", "조립 A", "조립 B", "조립 B"]
+    assert [r["Qty"] for r in rows] == [1, 2, 2, 4, 4, 6] and [r["엑셀 행"] for r in rows] == [2, 3, 4, 5, 6, 7]
+    assert any("'Group' 열: 위에 값이 없는 맨 위 빈 칸 1개는 그대로 두었습니다 (엑셀 행 2)" in w for w in out["warnings"])
+    assert [r["Group"] for r in rows_of(env, "m")][2] is None                               # 앞 표는 그대로
+
+
+def test_drop_duplicates_keeps_one_row(t):
+    env = t["env"]
+    out = ok(env, "drop-duplicates", "--from", "t", "--columns", "Part Number", "--name", "u")
+    assert out["count"] == 5 and "Part Number이(가) 같은 행은 먼저 나온 행만 남김 (뺀 행 1개: 엑셀 행 5)" in out["preview"]
+    out = ok(env, "drop-duplicates", "--from", "t", "--columns", "Part Number", "--keep", "last", "--name", "u2")
+    assert [r["엑셀 행"] for r in rows_of(env, "u2")] == [2, 4, 5, 6, 7] and "마지막 행만 남김 (뺀 행 1개: 엑셀 행 3)" in out["preview"]
+    out = ok(env, "drop-duplicates", "--from", "t")                                           # 모든 열이 같은 행은 없음
+    assert out["count"] == 6 and "모든 열이(가) 같은 행" in out["preview"] and "뺀 행 0개" in out["preview"]
+    out = ok(env, "drop-duplicates", "--from", "t", "--columns", "Note")                      # 빈 칸끼리는 같은 값
+    assert out["count"] == 4
+    code, out = run(env, "drop-duplicates", "--from", "t", "--columns", "Part Numbr")
+    assert code == 1 and "[후보] 1) Part Number" in out["message"]
+    code, out = run(env, "drop-duplicates", "--from", "t", "--subset", "Maker")              # pandas 옵션 이름 -> [추천]
+    assert code == 2 and recommended(out["message"]) == ["drop-duplicates", "--from", "t", "--columns", "Maker"]
+    assert ok(env, "drop-duplicates", "--from", "none")["count"] == 0
+
+
+def test_rename_changes_only_the_names(t):
+    env = t["env"]
+    out = ok(env, "rename", "--from", "t", "--columns", "Qty=수량,UoM=단위", "--name", "r")
+    assert out["count"] == 6 and "열 이름을 바꿈 (Qty -> 수량, UoM -> 단위)" in out["preview"]
+    cols = {c["name"]: c for c in out["columns"]}
+    assert cols["수량"]["letter"] == "D" and cols["수량"]["kind"] == "숫자" and "Qty" not in cols
+    assert rows_of(env, "r")[0]["수량"] == 2 and rows_of(env, "r")[0]["엑셀 행"] == 2
+    assert ok(env, "select", "--from", "r", "--where", "D>=3")["count"] == 2                   # 열 글자는 그대로
+    for bad, word in (("Qty=Maker", "이미 있는 열"), ("Qty", "모양이 아닙니다"), ("Qty=a,Maker=a", "이미 있는 열"), ("Qty=엑셀 행", "쓸 수 없는")):
+        code, out = run(env, "rename", "--from", "t", "--columns", bad)
+        assert code == 1 and word in out["message"], (bad, out["message"])
+    code, out = run(env, "rename", "--from", "t", "--columns", "Qyt=수량")
+    assert code == 1 and command_args(out["confirm_commands"][0]["command"])[-1] == "Qty=수량"
+    code, out = run(env, "rename", "--from", "t", "--columns", "Qty=수량;UoM=단위")
+    assert code == 1 and recommended(out["message"])[-1] == "Qty=수량,UoM=단위"
+    out = ok(env, "rename", "--from", "t", "--columns", "Qty=Maker,Maker=Qty")                # 서로 바꾸기
+    assert rows_of(env, out["table"])[0]["Maker"] == 2
+
+
+def test_second_round_tables_are_rebuilt_from_the_record(t):
+    env = t["env"]
+    ok(env, "dropna", "--from", "t", "--columns", "Unit Price", "--name", "a")
+    ok(env, "fillna", "--from", "t", "--columns", "Unit Price", "--value", "0", "--name", "b")
+    ok(env, "fillna", "--from", "t", "--columns", "Note", "--down", "--name", "c")
+    ok(env, "drop-duplicates", "--from", "t", "--columns", "Part Number", "--keep", "last", "--name", "d")
+    ok(env, "rename", "--from", "c", "--columns", "Qty=수량", "--name", "e")
+    before = {n: rows_of(env, n) for n in "abcde"}
+    drop_snapshots(t["work"])
+    for n, rows in before.items():
+        out = ok(env, "show", "--from", n)
+        assert out["rows"] == rows and any("작업 기록으로 다시 만듦" in r for r in out["recovered"]), n

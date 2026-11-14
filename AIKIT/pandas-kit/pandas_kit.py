@@ -1768,8 +1768,93 @@ def op_top(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], 
     return out.reset_index(drop=True), dict(meta), {"warnings": warnings}
 
 
+def _rows_note(df: Any, mask: Any) -> str:
+    """고른 행의 엑셀 행 번호 (lineage에 붙임). 엑셀 행이 없는 표(계산한 표)는 빈 글."""
+    if ROW not in df.columns or not bool(mask.any()):
+        return ""
+    return f": 엑셀 행 {_rows_text([int(r) for r in df.loc[mask, ROW].dropna().tolist()], 10)}"
+
+
+def op_dropna(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """--columns의 열 중 하나라도 빈 칸인 행을 뺌 (공백만 있는 글자 칸도 빈 칸)."""
+    pd = pd_mod()
+    df, meta = inputs["from"]
+    empty = pd.Series(False, index=df.index)
+    for c in args["columns"]:
+        empty = empty | ~_filled(df[c])
+    return df[~empty].reset_index(drop=True), dict(meta), {"warnings": [], "dropped": int(empty.sum()), "rows": _rows_note(df, empty)}
+
+
+def _fill_value(series: Any, col: str, text: str) -> Any:
+    """--value를 그 열의 종류에 맞는 값으로. 숫자 열에 글자, 날짜 열에 날짜가 아닌 값은 거절 (열의 종류를 바꾸지 않음)."""
+    pd = pd_mod()
+    if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+        try:
+            num = float(text.replace(",", ""))
+        except ValueError:
+            raise rt.InputError(f"'{col}' 열은 숫자 열이라 빈 칸을 '{text}'(으)로 채울 수 없습니다 (열이 글자 열로 바뀜). --value에 숫자를 주세요.") from None
+        return int(num) if num.is_integer() and pd.api.types.is_integer_dtype(series) else num
+    if pd.api.types.is_datetime64_any_dtype(series):
+        if not _DATE_TEXT.match(text.strip()):
+            raise rt.InputError(f"'{col}' 열은 날짜 열이라 '{text}'(으)로 채울 수 없습니다. --value에 2026-12-31처럼 연-월-일로 주세요.")
+        try:
+            return pd.Timestamp(text)
+        except (ValueError, TypeError):
+            raise rt.InputError(f"--value '{text}'은(는) 없는 날짜입니다.") from None
+    return text
+
+
+def op_fillna(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """--columns 열의 빈 칸을 --value로, 또는 --down이면 바로 위의 값으로 채움 (병합 칸을 푼 표, 위와 같은 값을 비워 둔 표).
+    --down에서 맨 위부터 비어 있는 칸은 채울 값이 없어 그대로 두고 warnings."""
+    pd = pd_mod()
+    df, meta = inputs["from"]
+    df = df.copy()
+    warnings: List[str] = []
+    filled_n: List[Tuple[str, int]] = []
+    for c in args["columns"]:
+        empty = ~_filled(df[c])
+        if args.get("down"):
+            new = df[c].where(~empty).ffill()
+            left = empty & ~_filled(new)
+            if left.any():
+                rows = _rows_note(df, left)
+                warnings.append(f"'{c}' 열: 위에 값이 없는 맨 위 빈 칸 {int(left.sum())}개는 그대로 두었습니다" + (f" ({rows[2:]})" if rows else "") + ".")
+        else:
+            new = df[c].where(~empty, _fill_value(df[c], c, str(args["value"])))
+        if pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c]):
+            new = pd.to_numeric(new)
+            if pd.api.types.is_integer_dtype(df[c]) and bool(new.dropna().map(lambda v: float(v).is_integer()).all()):
+                new = new.astype(df[c].dtype)
+        filled_n.append((c, int((empty & _filled(new)).sum())))
+        df[c] = new
+    return df, dict(meta), {"warnings": warnings, "filled": filled_n}
+
+
+def op_drop_duplicates(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """--columns(생략하면 모든 열)의 값이 모두 같은 행은 하나만 남김 (--keep first: 표에서 먼저 나온 행, last: 마지막 행).
+    보이는 글자로 비교하고(2와 2.0은 같음), 빈 칸끼리는 같은 값으로 본다."""
+    pd = pd_mod()
+    df, meta = inputs["from"]
+    cols = args.get("columns") or data_cols(df)
+    key = pd.DataFrame({c: _as_text(df[c]).where(_filled(df[c]), EMPTY_SHOWN) for c in cols}, index=df.index)
+    dup = key.duplicated(keep=args.get("keep") or "first")
+    return df[~dup].reset_index(drop=True), dict(meta), {"warnings": [], "dropped": int(dup.sum()), "rows": _rows_note(df, dup)}
+
+
+def op_rename(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
+    """열 이름 바꾸기 (값과 행, 원본 열 글자는 그대로)."""
+    df, meta = inputs["from"]
+    names = dict(args["columns"])
+    out = dict(meta)
+    for part in ("letters", "kinds", "units"):
+        out[part] = {names.get(c, c): v for c, v in (meta.get(part) or {}).items()}
+    return df.rename(columns=names), out, {"warnings": []}
+
+
 OP_FUNCS = {"select": op_select, "join": op_join, "only": op_only, "stack": op_stack, "diff": op_diff,
-            "group": op_group, "sort": op_sort, "describe": op_describe, "unique": op_unique, "calc": op_calc, "top": op_top}
+            "group": op_group, "sort": op_sort, "describe": op_describe, "unique": op_unique, "calc": op_calc, "top": op_top,
+            "dropna": op_dropna, "fillna": op_fillna, "drop-duplicates": op_drop_duplicates, "rename": op_rename}
 
 
 def run_op(op: str, args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
@@ -2147,6 +2232,71 @@ def cmd_top(a: Any) -> Dict[str, Any]:
         a, "top",
         lambda df, meta, src: {"by": _numeric_cols_of(a.by, df, meta, "--by"), "n": int(a.n), "asc": bool(a.asc)},
         lambda name, src, args, info: f"{name} = {src}에서 {','.join(args['by'])} " + ("작은" if args["asc"] else "큰") + f" 순 앞 {args['n']}행")
+
+
+def cmd_dropna(a: Any) -> Dict[str, Any]:
+    return _one_table(
+        a, "dropna", lambda df, meta, src: {"columns": column_list(a.columns, df, meta, "--columns")},
+        lambda name, src, args, info: f"{name} = {src}에서 {','.join(args['columns'])}이(가) 빈 칸인 행 {info['dropped']}개를 뺌{info['rows']}")
+
+
+def cmd_fillna(a: Any) -> Dict[str, Any]:
+    if a.down and a.value is not None:
+        raise rt.InputError("--value(이 값으로 채움)와 --down(위 값으로 채움)은 함께 쓰지 않습니다. 하나만 주세요.")
+    if not a.down and a.value is None:
+        raise rt.InputError("빈 칸을 무엇으로 채울지 정해 주세요: --value \"<값>\"(이 값으로) 또는 --down(바로 위 칸의 값으로, 병합 칸 정리).")
+
+    def make(df: Any, meta: Dict[str, Any], src: str) -> Dict[str, Any]:
+        cols = column_list(a.columns, df, meta, "--columns")
+        if not a.down:
+            for c in cols:
+                _fill_value(df[c], c, str(a.value))                # 열 종류에 맞지 않는 값은 여기서 멈춤
+        return {"columns": cols, "down": bool(a.down), "value": None if a.down else str(a.value)}
+    return _one_table(
+        a, "fillna", make,
+        lambda name, src, args, info: f"{name} = {src}의 빈 칸을 " + ("위 값으로" if args["down"] else f"'{args['value']}'(으)로")
+                                      + " 채움 (" + ", ".join(f"{c} {n}칸" for c, n in info["filled"]) + ")")
+
+
+def cmd_drop_duplicates(a: Any) -> Dict[str, Any]:
+    return _one_table(
+        a, "drop-duplicates",
+        lambda df, meta, src: {"columns": column_list(a.columns, df, meta, "--columns") if a.columns else None, "keep": a.keep},
+        lambda name, src, args, info: f"{name} = {src}에서 {','.join(args['columns']) if args['columns'] else '모든 열'}이(가) 같은 행은 "
+                                      + ("먼저 나온" if args["keep"] == "first" else "마지막") + f" 행만 남김 (뺀 행 {info['dropped']}개{info['rows']})")
+
+
+def _rename_pairs(a: Any, df: Any, meta: Dict[str, Any]) -> List[List[str]]:
+    text = str(a.columns)
+    if ";" in text and "," not in text:
+        fixed = ",".join(p.strip() for p in text.split(";") if p.strip())
+        raise rt.InputError(f"--columns의 이름 사이는 ','로 나눕니다. [추천] {rt.full_command(argv_setting('--columns', fixed))}")
+    pairs: List[List[str]] = []
+    cols = data_cols(df)
+    for part in [p.strip() for p in split_outside_quotes(text, ",") if p.strip()]:
+        old, eq, new = part.partition("=")
+        new = unquote(new)
+        if not eq or not old.strip() or not new:
+            raise rt.InputError(f"--columns '{part}'은(는) \"지금 이름=새 이름\" 모양이 아닙니다 (예: --columns \"Qty=수량,UoM=단위\").")
+        c = resolve_column(old.strip(), df, meta, "--columns")
+        if c in [p[0] for p in pairs]:
+            raise rt.InputError(f"--columns에 '{c}' 열이 두 번 나옵니다. 열마다 새 이름을 하나만 주세요.")
+        if c != new:
+            pairs.append([c, new])
+    stay = [c for c in cols if c not in [p[0] for p in pairs]]        # 이름이 그대로인 열 (서로 바꾸기 Qty=Maker,Maker=Qty는 됨)
+    news = [p[1] for p in pairs]
+    for new in news:
+        if is_row_col(new) or new in stay or news.count(new) > 1:
+            raise rt.InputError(f"--columns의 새 이름 '{new}'은(는) 이미 있는 열이거나 쓸 수 없는 이름입니다 ('엑셀 행', '... 행'은 도구가 씀). 다른 이름을 주세요.")
+    if not pairs:
+        raise rt.InputError("--columns에 바꿀 이름이 없습니다 (예: --columns \"Qty=수량,UoM=단위\").")
+    return pairs
+
+
+def cmd_rename(a: Any) -> Dict[str, Any]:
+    return _one_table(
+        a, "rename", lambda df, meta, src: {"columns": _rename_pairs(a, df, meta)},
+        lambda name, src, args, info: f"{name} = {src}의 열 이름을 바꿈 (" + ", ".join(f"{o} -> {n}" for o, n in args["columns"]) + ")")
 
 
 OFFICE_EXCEL = os.path.join(os.path.dirname(rt.TOOL_DIR), "office-cli", "excel.py")
@@ -2584,6 +2734,29 @@ def build_cli() -> rt.JsonArgumentParser:
     p.add_argument("--asc", action="store_true", help="작은 순")
     p.add_argument("--name", help="새 표 이름")
 
+    p = cmd("dropna", "빈 칸이 있는 행 빼기")
+    p.add_argument("--from", dest="source", help="표 이름 (꼭 씀, 빼면 [후보]로 물음)")
+    p.add_argument("--columns", required=True, help="빈 칸이면 안 되는 열 (','로 나눔, 하나라도 빈 칸이면 그 행을 뺌)")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("fillna", "빈 칸 채우기 (--value 값으로, --down 바로 위 칸의 값으로)")
+    p.add_argument("--from", dest="source", help="표 이름 (꼭 씀, 빼면 [후보]로 물음)")
+    p.add_argument("--columns", required=True, help="빈 칸을 채울 열 (','로 나눔)")
+    p.add_argument("--value", help="채울 값 (숫자 열에는 숫자, 날짜 열에는 2026-12-31)")
+    p.add_argument("--down", action="store_true", help="바로 위 칸의 값으로 채움 (병합 칸을 푼 표, 위와 같은 값을 비워 둔 표)")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("drop-duplicates", "값이 같은 행은 하나만 남기기")
+    p.add_argument("--from", dest="source", help="표 이름 (꼭 씀, 빼면 [후보]로 물음)")
+    p.add_argument("--columns", help="같은지 볼 열 (','로 나눔, 생략하면 모든 열)")
+    p.add_argument("--keep", choices=("first", "last"), default="first", help="남길 행: first 먼저 나온 행(기본), last 마지막 행")
+    p.add_argument("--name", help="새 표 이름")
+
+    p = cmd("rename", "열 이름 바꾸기")
+    p.add_argument("--from", dest="source", help="표 이름 (꼭 씀, 빼면 [후보]로 물음)")
+    p.add_argument("--columns", required=True, help="\"지금 이름=새 이름\" (','로 나눔. 예: \"Qty=수량,UoM=단위\")")
+    p.add_argument("--name", help="새 표 이름")
+
     cmd("undo", "마지막 단계 하나 되돌리기")
     rt.add_command(sub, root, "new", "새 작업 시작 (다음 select --file이 새 작업 폴더를 만듦)")
 
@@ -2607,7 +2780,7 @@ def build_cli() -> rt.JsonArgumentParser:
 COMMANDS = {"select": cmd_select, "show": cmd_show, "join": cmd_join, "only": cmd_only, "diff": cmd_diff,
             "stack": cmd_stack, "undo": cmd_undo, "new": cmd_new, "export": cmd_export, "chart": cmd_chart,
             "group": cmd_group, "sort": cmd_sort, "describe": cmd_describe, "unique": cmd_unique, "calc": cmd_calc,
-            "top": cmd_top}
+            "top": cmd_top, "dropna": cmd_dropna, "fillna": cmd_fillna, "drop-duplicates": cmd_drop_duplicates, "rename": cmd_rename}
 
 
 def main(argv: Optional[List[str]] = None) -> None:

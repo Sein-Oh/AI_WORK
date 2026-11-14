@@ -388,6 +388,8 @@ SAME_MEANING: Dict[str, List[str]] = {
     "--output": ["--save"], "--out": ["--save"], "--save-as": ["--save"], "--filter": ["--where"], "--query": ["--where"],
     "--base": ["--old"], "--before": ["--old"], "--after": ["--new"],
     "--first": ["--left"], "--second": ["--right"],
+    "--expression": ["--expr"], "--formula": ["--expr"], "--subset": ["--columns"], "--ffill": ["--down"],
+    "--ascending": ["--asc"], "--descending": ["--desc"], "--avg": ["--mean"], "--average": ["--mean"],
     "-f": ["--file"], "-o": ["--save"], "-w": ["--where"], "-n": ["--name"],
 }
 NO_FUZZY_OPTIONS = {"--overwrite", "--help"}
