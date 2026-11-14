@@ -1,16 +1,16 @@
 ---
 name: where-used
-description: BOM 엑셀에서 한 품목이 어느 상위 조립체에 쓰였는지와 제품 1대당 수량을 찾는다 (pandas-kit 명령 + 이 폴더 scripts). 상위 품번 열 없이 Level과 행 순서로 구조를 적은 BOM에서, 최상위부터의 경로와 상위 수량을 곱한 소요량을 알린다. "이 부품 어디에 쓰여", "볼트 쓰인 곳 찾아줘", "제품 한 대에 몇 개 들어가", "역전개"에 사용. 원본 파일은 고치지 않는다.
+description: BOM 엑셀에서 한 품목이 어느 상위 조립체에 쓰였는지와 제품 1대당 수량을 찾는다 (pandas-kit 명령 + bom-kit). 상위 품번 열 없이 Level과 행 순서로 구조를 적은 BOM에서, 최상위부터의 경로와 상위 수량을 곱한 소요량을 알린다. "이 부품 어디에 쓰여", "볼트 쓰인 곳 찾아줘", "제품 한 대에 몇 개 들어가", "역전개"에 사용. 원본 파일은 고치지 않는다.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   platform: windows
 ---
 
 # where-used 스킬 (품목이 쓰인 상위 찾기)
 
-pandas-kit 기본 스킬의 명령을 이어 쓰는 조합 스킬이다. 결과 처리는 전역 지침 4장, 승인은 5장을 따른다.
+pandas-kit 명령(표 읽기·비교)과 bom-kit 명령(BOM 계산)을 이어 쓰는 스킬이다. 결과 처리는 전역 지침 4장, 승인은 5장을 따른다.
 두 판을 비교하는 일은 이 스킬이 아니라 mbom-diff다.
 
 ## 찾는 기준 (업무 규칙)
@@ -28,7 +28,7 @@ pandas-kit 기본 스킬의 명령을 이어 쓰는 조합 스킬이다. 결과 
 | 1. 새 작업 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" new` |
 | 2. BOM 읽기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" select --file "<BOM.xlsx>" --name bom` |
 | 3. csv로 내보내기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" export --from bom --save bom.csv` |
-| 4. 쓰인 곳 찾기 | `python "C:\AIKIT\.opencode\skills\where-used\scripts\where_used.py" --file "<3단계 output_file>" --find "<품번이나 품명>"` |
+| 4. 쓰인 곳 찾기 | `python "C:\AIKIT\bom-kit\bom.py" where-used --file "<3단계 output_file>" --find "<품번이나 품명>"` |
 
 - BOM이 첫 시트에 없으면 2단계에 `--sheet "<시트>"`를 붙인다. 표 범위를 `[후보]`로 물으면 사용자에게 보여 주고 고른 번호의 명령을 실행한다.
 - 2단계의 `warnings`는 모두 사용자에게 알린다 (숨긴 행, 빈 행, 두 줄 머리글 등).

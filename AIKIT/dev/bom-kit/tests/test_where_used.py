@@ -1,34 +1,22 @@
 # -*- coding: utf-8 -*-
-"""where-used 기본 스킬(AIKIT/.opencode/skills/where-used)을 SKILL.md 순서 그대로 실행해,
+"""where-used 기본 스킬의 순서(SKILL.md)를 pandas-kit + bom-kit으로 그대로 실행해,
 make_mbom_samples의 MBOM에서 품목이 쓰인 상위와 제품 1대당 수량이 맞는지 본다."""
-import json
 import os
-import subprocess
-import sys
 
 import pytest
 
-from pk_helpers import env, ok  # noqa: F401  (env는 fixture)
+from bk_helpers import AIKIT, bom, make_samples, ok
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-TOOLS = os.path.join(os.path.dirname(HERE), "tools")
-SKILL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(HERE))), ".opencode", "skills", "where-used")
+SKILL = os.path.join(AIKIT, ".opencode", "skills", "where-used")
 
 
 def script(*args):
-    p = subprocess.run([sys.executable, os.path.join(SKILL, "scripts", "where_used.py"), *map(str, args)],
-                       capture_output=True, text=True, encoding="utf-8", env=os.environ.copy())
-    lines = [l for l in p.stdout.splitlines() if l.strip()]
-    assert len(lines) == 1, (p.stdout, p.stderr)
-    return p.returncode, json.loads(lines[0])
+    return bom("where-used", *args)
 
 
 @pytest.fixture
 def bom_csv(env):
-    out = env["dir"] / "mbom"
-    p = subprocess.run([sys.executable, os.path.join(TOOLS, "make_mbom_samples.py"), "--out", str(out)],
-                       capture_output=True, text=True, encoding="utf-8")
-    assert p.returncode == 0, p.stderr
+    out = make_samples(env["dir"] / "mbom")
     ok(env, "new")
     ok(env, "select", "--file", str(out / "MBOM_DR200.xlsx"), "--name", "bom")
     return ok(env, "export", "--from", "bom", "--save", "bom.csv")["output_file"]
@@ -77,7 +65,7 @@ def test_skill_md_commands_exist_and_are_short():
         raw = f.read().replace(b"\r\n", b"\n")
     assert len(raw) <= 8192
     text = raw.decode("utf-8")
-    assert "name: where-used" in text and 'version: "0.1.0"' in text
+    assert "name: where-used" in text and 'version: "0.2.0"' in text and r'C:\AIKIT\bom-kit\bom.py" where-used' in text
     for opt in ("--file", "--find", "--level", "--part", "--qty"):
         assert opt in text
     assert "mbom-diff" in text                                           # 두 판 비교는 그쪽이라고 알려 줌

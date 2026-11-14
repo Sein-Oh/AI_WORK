@@ -1,16 +1,16 @@
 ---
 name: mbom-diff
-description: MBOM(제조 BOM) 엑셀 두 판에서 무엇이 바뀌었는지 찾는다 (pandas-kit 명령 + 이 폴더 scripts). 상위 품번 열 없이 Level과 행 순서로 구조를 적은 BOM에서, 품목마다 최상위부터의 경로로 짝을 맞춰 추가·삭제·대체 후보·바뀐 칸을 알린다. "BOM 두 판 뭐가 바뀌었어", "MBOM 개정 내용 찾아줘", "v2와 v2_mod 비교"에 사용. 원본 파일은 고치지 않는다.
+description: MBOM(제조 BOM) 엑셀 두 판에서 무엇이 바뀌었는지 찾는다 (pandas-kit 명령 + bom-kit). 상위 품번 열 없이 Level과 행 순서로 구조를 적은 BOM에서, 품목마다 최상위부터의 경로로 짝을 맞춰 추가·삭제·대체 후보·바뀐 칸을 알린다. "BOM 두 판 뭐가 바뀌었어", "MBOM 개정 내용 찾아줘", "v2와 v2_mod 비교"에 사용. 원본 파일은 고치지 않는다.
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
   platform: windows
 ---
 
 # mbom-diff 스킬 (MBOM 두 판의 변경 찾기)
 
-pandas-kit 기본 스킬의 명령을 이어 쓰는 조합 스킬이다. 결과 처리는 전역 지침 4장, 승인은 5장을 따른다.
+pandas-kit 명령(표 읽기·비교)과 bom-kit 명령(BOM 계산)을 이어 쓰는 스킬이다. 결과 처리는 전역 지침 4장, 승인은 5장을 따른다.
 
 ## 비교 기준 (업무 규칙)
 1. 상위 품번 = 위쪽 행 중 가장 가까운, Level이 더 작은 행. 품목마다 최상위부터 품번을 `/`로 이은 **경로**로 두 판의 짝을 맞춘다.
@@ -30,9 +30,9 @@ pandas-kit 기본 스킬의 명령을 이어 쓰는 조합 스킬이다. 결과 
 | 3. 새 판 읽기 | `python "C:\AIKIT\pandas-kit\pandas_kit.py" select --file "<새 판.xlsx>" --name new` |
 | 4. 옛 판 csv | `python "C:\AIKIT\pandas-kit\pandas_kit.py" export --from old --save old.csv` |
 | 5. 새 판 csv | `python "C:\AIKIT\pandas-kit\pandas_kit.py" export --from new --save new.csv` |
-| 6. 경로 계산 | `python "C:\AIKIT\.opencode\skills\mbom-diff\scripts\mbom_path.py" --old "<4단계 output_file>" --new "<5단계 output_file>"` |
+| 6. 경로 계산 | `python "C:\AIKIT\bom-kit\bom.py" path --old "<4단계 output_file>" --new "<5단계 output_file>"` |
 | 7. 비교 | 6단계 결과의 `next_commands`를 처음부터 끝까지 순서대로 모두 실행한다 (경로 붙이기, 경로로 diff, 결과 export). 중간 명령이 주는 `next_commands`는 따르지 않는다. |
-| 8. 요약 | `python "C:\AIKIT\.opencode\skills\mbom-diff\scripts\mbom_summary.py" --file "<7단계 마지막 명령의 output_file>"` |
+| 8. 요약 | `python "C:\AIKIT\bom-kit\bom.py" summary --file "<7단계 마지막 명령의 output_file>"` |
 
 - BOM이 첫 시트에 없으면 2·3단계에 `--sheet "<시트>"`를 붙인다. 표 범위가 틀렸다고 하면 `--range`를 붙인다.
 - 4·5단계와 7단계의 `--save`는 파일 이름만 쓴다 (도구가 작업 폴더에 저장). 다음 단계에는 결과의 `output_file`을 그대로 넘긴다.

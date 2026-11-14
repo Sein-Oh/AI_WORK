@@ -1,37 +1,20 @@
 # -*- coding: utf-8 -*-
-"""mbom-diff 기본 스킬(AIKIT/.opencode/skills/mbom-diff)을 SKILL.md 순서 그대로 실행해, make_mbom_samples의 정답(MOD_CHANGES)과 맞춰 본다.
-스킬 스크립트가 낸 next_commands는 글자 그대로 실행한다 (LLM이 하듯)."""
-import json
+"""mbom-diff 기본 스킬의 순서(SKILL.md)를 pandas-kit + bom-kit으로 그대로 실행해, make_mbom_samples의 정답(MOD_CHANGES)과 맞춰 본다.
+bom.py path가 낸 next_commands는 글자 그대로 실행한다 (LLM이 하듯)."""
 import os
-import subprocess
-import sys
 
 import pytest
 
-from pk_helpers import command_args, env, ok  # noqa: F401  (env는 fixture)
+from bk_helpers import AIKIT, bom, command_args, make_samples, ok
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-TOOLS = os.path.join(os.path.dirname(HERE), "tools")
-SKILL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(HERE))), ".opencode", "skills", "mbom-diff")
-sys.path.insert(0, TOOLS)
-import make_mbom_samples as samples  # noqa: E402
+import make_mbom_samples as samples  # noqa: E402  (bk_helpers가 경로를 더함)
 
-
-def script(name, *args):
-    p = subprocess.run([sys.executable, os.path.join(SKILL, "scripts", name), *map(str, args)],
-                       capture_output=True, text=True, encoding="utf-8", env=os.environ.copy())
-    lines = [l for l in p.stdout.splitlines() if l.strip()]
-    assert len(lines) == 1, (p.stdout, p.stderr)
-    return p.returncode, json.loads(lines[0])
+SKILL = os.path.join(AIKIT, ".opencode", "skills", "mbom-diff")
 
 
 @pytest.fixture
 def files(env):
-    out = env["dir"] / "mbom"
-    p = subprocess.run([sys.executable, os.path.join(TOOLS, "make_mbom_samples.py"), "--out", str(out)],
-                       capture_output=True, text=True, encoding="utf-8")
-    assert p.returncode == 0, p.stderr
-    return out
+    return make_samples(env["dir"] / "mbom")
 
 
 def compare(env, old, new):
@@ -41,13 +24,13 @@ def compare(env, old, new):
     ok(env, "select", "--file", new, "--name", "new")
     o = ok(env, "export", "--from", "old", "--save", "old.csv")["output_file"]
     n = ok(env, "export", "--from", "new", "--save", "new.csv")["output_file"]
-    code, path = script("mbom_path.py", "--old", o, "--new", n)
+    code, path = bom("path", "--old", o, "--new", n)
     assert code == 0 and path["agent_directive"].startswith("VERIFIED:"), path
     assert [c["command"].split()[2] for c in path["next_commands"]] == ["select", "join", "select", "join", "diff", "export"]
     outs = [ok(env, *command_args(c["command"])) for c in path["next_commands"]]
     diff, last = outs[4], outs[5]
     rows = ok(env, "show", "--from", "chg")["rows"]
-    code, summary = script("mbom_summary.py", "--file", last["output_file"])
+    code, summary = bom("summary", "--file", last["output_file"])
     assert code == 0 and summary["agent_directive"].startswith("VERIFIED:"), summary
     return diff, rows, summary
 
@@ -94,11 +77,11 @@ def test_v1_to_v2_and_same_file(env, files):
 def test_path_script_stops_with_column_list_when_level_column_is_missing(env, tmp_path):
     a = tmp_path / "old.csv"
     a.write_text("엑셀 행,Lv,Part Number\n7,0,A\n", encoding="utf-8-sig")
-    code, out = script("mbom_path.py", "--old", a, "--new", a)
+    code, out = bom("path", "--old", a, "--new", a)
     assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:") and "Lv" in out["message"]
-    code, out = script("mbom_path.py", "--old", a, "--new", a, "--level", "Lv")
+    code, out = bom("path", "--old", a, "--new", a, "--level", "Lv")
     assert code == 1 and "이름(표 이름)이 같습니다" in out["message"]
-    code, out = script("mbom_path.py", "--bogus")
+    code, out = bom("path", "--bogus")
     assert code == 2 and out["status"] == "error"
 
 
@@ -106,7 +89,7 @@ def test_paths_number_repeated_parts_and_warn_level_jumps(env, tmp_path):
     rows = ["엑셀 행,Level,Part Number", "2,0,TOP", "3,1,S", "4,2,P", "5,1,S", "6,2,P", "7,3,X", "8,1,Q", "9,3,Z", "10,x,BAD"]
     for name in ("old", "new"):
         (tmp_path / f"{name}.csv").write_text("\n".join(rows) + "\n", encoding="utf-8-sig")
-    code, out = script("mbom_path.py", "--old", tmp_path / "old.csv", "--new", tmp_path / "new.csv")
+    code, out = bom("path", "--old", tmp_path / "old.csv", "--new", tmp_path / "new.csv")
     assert code == 0 and "S#1, S#2" in out["preview"]
     assert any("건너뛴 행 1개 (엑셀 행 9)" in w for w in out["warnings"])
     assert any("품번이 빈 행 1개" in w and "엑셀 행 10" in w for w in out["warnings"])

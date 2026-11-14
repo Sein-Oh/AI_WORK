@@ -1,0 +1,20 @@
+# CHANGELOG - bom-kit
+
+형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
+
+## [0.1.0] - 2026-11-14
+
+### 구조
+- 새 도구 (사용자 결정 2026-11-14): mbom-diff·where-used 스킬 폴더의 스크립트 3개(`mbom_path.py`, `mbom_summary.py`, `where_used.py`)에
+  따로 있던 같은 계산(Level로 상위·경로, 열 찾기, csv 읽기)을 `AIKIT/bom-kit/bom.py` 한 곳으로 (한쪽만 고치면 두 스킬이 같은 BOM을 다르게 읽음).
+  공통 런타임 `_bom_runtime.py`는 pandas-kit `_pd_runtime.py`에서 복사 (표준 라이브러리만). 스킬은 그대로 둘 (필요한 순서만 읽음).
+- 스킬 스크립트와 달리 공통 계약을 따름: 인자 오류·도움말 JSON, 같은 뜻 옵션 `[추천]`, 오류 로그, 잠긴 파일 새 이름, 인코딩 자동 판별,
+  pandas-kit 명령의 셸 따옴표(`quote_arg`).
+
+### 기능
+- `path`, `summary`, `where-used` (README). 결과는 스킬 스크립트와 같음 (v2 -> v2_mod 요약, where-used 4가지 찾기를 나란히 돌려 확인).
+- 시험: `test_mbom_diff.py`, `test_where_used.py`(pandas-kit 시험에서 옮김), `test_contract.py`.
+
+## 남은 할 일
+- 누적 수량·총소요량(제품 N대에 품목별 합계), BOM 한 판 점검(같은 상위 아래 같은 품번, 수량 0, 단위 섞임).
+- Level 표기 `.1`, `..2`(점으로 깊이), 상위 품번 열이 이미 있는 BOM.
