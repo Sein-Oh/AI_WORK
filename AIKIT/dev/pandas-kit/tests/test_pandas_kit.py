@@ -8,6 +8,7 @@ import re
 import shlex
 import sys
 import time
+from datetime import date as dt_date
 
 import openpyxl
 import pandas as pd
@@ -731,3 +732,72 @@ def test_same_read_warning_for_many_columns_is_one_line(env):
     out = ok(env, "select", "--file", _sheet(env["dir"] / "w.xlsx", rows), "--name", "w")
     notes = [w for w in out["warnings"] if "숫자 사이에 숫자가 아닌 칸" in w]
     assert len(notes) == 1 and "a(A), b(B), c(C) 열은 숫자 사이에 숫자가 아닌 칸(엑셀 행 3)" in notes[0]
+
+
+# ---------------------------------------------------------------------------
+# 회사 엑셀에 흔한 모양: 두 줄 머리글, 머리글 없는 열, 천 단위 쉼표·기호·글자 날짜 (집 PC 2026-11-14)
+# ---------------------------------------------------------------------------
+
+def _messy(path):
+    """3행은 병합한 묶음 이름, 4행이 진짜 머리글, G열(입고일)은 묶음 이름이 없다."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "2026년 1분기 구매 집계"
+    ws.append([])
+    ws["A3"], ws["D3"], ws["F3"] = "기본", "금액", "납기"
+    ws.merge_cells("A3:C3")
+    ws.merge_cells("D3:E3")
+    ws.append(["업체", "품번", "수량", "단가", "합계", "요청일", "입고일"])
+    for r in [("한빛볼트", "0101", "1,200", "₩1,500", "1,800,000", "2026.01.05", dt_date(2026, 1, 9)),
+              ("대성윤활", "0102", "350", "₩12,000", "4,200,000", "2026.01.12", dt_date(2026, 1, 15)),
+              ("한빛볼트", "0103", "80", "₩9,900", "792,000", "2026.02.03", dt_date(2026, 2, 6)),
+              ("미래실링", "0104", "2,400", "₩450", "1,080,000", "2026.02.20", dt_date(2026, 2, 25))]:
+        ws.append(list(r))
+    wb.save(path)
+    return str(path)
+
+
+def test_two_row_header_uses_the_lower_row_and_keeps_every_column(env):
+    # 집 PC 2026-11-14: 위의 묶음 이름 줄이 머리글이 되어 열 이름이 '기본', '열_B'가 되고 G열(입고일)이 통째로 빠졌음
+    out = ok(env, "select", "--file", _messy(env["dir"] / "messy.xlsx"), "--name", "구매")
+    names = [c["name"] for c in out["columns"]]
+    assert names == ["업체", "품번", "수량", "단가", "합계", "요청일", "입고일"] and out["count"] == 4
+    assert out["anchor"]["range"] == "A4:G8" and out["anchor"]["header_row"] == 4
+    assert any("머리글이 두 줄이라 아래 줄(4행)" in w and "기본, 금액, 납기" in w for w in out["warnings"])
+    rows = ok(env, "show")["rows"]
+    assert rows[0]["엑셀 행"] == 5 and rows[0]["업체"] == "한빛볼트" and rows[0]["입고일"] == "2026-01-09"
+
+
+def test_a_column_whose_header_is_empty_is_read_but_a_stray_cell_is_not(env):
+    rows = [("업체", "수량", None), ("한빛볼트", 3, "A"), ("대성", 5, "B"), ("미래", 7, "C")]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "noname.xlsx", rows), "--name", "a")
+    assert [c["name"] for c in out["columns"]] == ["업체", "수량", "열_C"]
+    assert any("머리글이 비어 있지만 값이 있는 열 1개(C)" in w for w in out["warnings"])
+    stray = [("업체", "수량"), ("한빛볼트", 3), ("대성", 5), ("미래", 7)]
+    p = _sheet(env["dir"] / "stray.xlsx", stray)
+    wb = openpyxl.load_workbook(p)
+    wb.active["D3"] = "메모 한 칸"                                      # 한 행에만 있는 칸은 열이 아님
+    wb.save(p)
+    out2 = ok(env, "select", "--file", p, "--name", "b")
+    assert [c["name"] for c in out2["columns"]] == ["업체", "수량"]
+
+
+def test_thousands_separator_currency_and_text_dates(env):
+    out = ok(env, "select", "--file", _messy(env["dir"] / "messy.xlsx"), "--name", "구매")
+    kinds = {c["name"]: c["kind"] for c in out["columns"]}
+    assert kinds["수량"] == "숫자" and kinds["합계"] == "숫자" and kinds["요청일"] == "날짜" and kinds["단가"] == "글자"
+    assert any("수량(C), 합계(E) 열은 천 단위 쉼표가 있는 숫자라" in w for w in out["warnings"])
+    assert any("요청일(F) 열은 글자로 적힌 날짜" in w for w in out["warnings"])
+    assert any("단가(D) 열은 숫자에 기호가 붙어" in w and "group --sum으로 더할 수는 없습니다" in w for w in out["warnings"])
+    assert ok(env, "show")["rows"][0]["수량"] == 1200                      # 값은 같고 쉼표만 뺌
+    g = ok(env, "group", "--by", "업체", "--sum", "합계", "--name", "업체별")
+    assert {r["업체"]: r["합계 합계"] for r in ok(env, "show", "--from", "업체별")["rows"]}["한빛볼트"] == 2592000
+    assert ok(env, "select", "--from", "구매", "--where", "요청일>=2026-02-01")["count"] == 2
+    s = ok(env, "sort", "--from", "구매", "--by", "단가", "--desc", "--name", "비싼")
+    assert any("숫자로 읽히는 칸끼리 숫자로 정렬" in w for w in s["warnings"])
+    assert [r["단가"] for r in ok(env, "show", "--from", "비싼")["rows"]][:2] == ["₩12,000", "₩9,900"]
+    code, err = run(env, "group", "--from", "구매", "--by", "업체", "--sum", "단가")
+    assert code == 1 and "숫자 열이 아니어서" in err["message"]
+    rows = [("날짜", "값"), ("05/01/2026", 1), ("06/02/2026", 2), ("07/03/2026", 3)]   # 뜻이 둘인 날짜는 글자 그대로
+    out2 = ok(env, "select", "--file", _sheet(env["dir"] / "amb.xlsx", rows), "--name", "c")
+    assert {c["name"]: c["kind"] for c in out2["columns"]}["날짜"] == "글자"

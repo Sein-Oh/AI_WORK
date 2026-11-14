@@ -46,6 +46,9 @@ _RANGE = re.compile(r"^([A-Z]{1,3})?(\d+)?(?::([A-Z]{1,3})?(\d+)?)?$")
 _LETTERS = re.compile(r"^[A-Z]{1,3}$")
 _NAME = re.compile(r"^[^\W\d][\w]*$")
 _NUM_TEXT = re.compile(r"^-?\d+(\.\d+)?$")
+_NUM_COMMA = re.compile(r"^-?\d{1,3}(,\d{3})+(\.\d+)?$")        # 1,200 (회사 파일에 흔한 천 단위 쉼표)
+_NUM_SYMBOL = re.compile(r"^[^\d\s]{1,2}\s*-?\d[\d,]*(\.\d+)?$|^-?\d[\d,]*(\.\d+)?\s*[^\d\s.]{1,4}$")   # W1,500, 12 kg
+_TEXT_DATE = re.compile(r"^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})$")                                       # 2026.01.05
 _LEADING_ZERO = re.compile(r"^-?0\d")
 _DATE_TEXT = re.compile(r"^\d{4}-\d{1,2}-\d{1,2}( \d{1,2}:\d{2}(:\d{2})?)?$")      # 날짜 열의 조건 값: 연-월-일 (시각은 붙여도 됨)
 
@@ -477,6 +480,33 @@ def _is_number_text(v: Any) -> bool:
     return isinstance(v, str) and bool(_NUM_TEXT.match(v)) and not _LEADING_ZERO.match(v)
 
 
+def _is_comma_number(v: Any) -> bool:
+    return isinstance(v, str) and bool(_NUM_COMMA.match(v.strip()))
+
+
+def _text_date(v: Any) -> Optional[date]:
+    """'2026.01.05', '2026-1-5' -> date. 연이 앞인 네 자리일 때만 (05/01/2026처럼 뜻이 둘인 것은 글자 그대로)."""
+    if not isinstance(v, str):
+        return None
+    m = _TEXT_DATE.match(v.strip())
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def as_numbers(series: Any) -> Any:
+    """글자 열의 칸을 숫자로 (쉼표·공백과 앞뒤 기호를 뺌: '1,200' -> 1200, 'W1,500' -> 1500, '12 kg' -> 12).
+    비교·정렬에만 쓰고 표의 값은 바꾸지 않는다."""
+    pd = pd_mod()
+    text = series.astype("string").str.strip()
+    text = text.str.replace(r"[,\s]", "", regex=True)
+    text = text.str.replace(r"^[^\d\-+.]+", "", regex=True).str.replace(r"[^\d]+$", "", regex=True)
+    return pd.to_numeric(text, errors="coerce")
+
+
 def _rows_text(rs: List[int], limit: int = 5) -> str:
     return ", ".join(str(r) for r in rs[:limit]) + (" 등" if len(rs) > limit else "")
 
@@ -485,10 +515,19 @@ def column_read_warning(name: str, letter: str, cells: List[Tuple[int, Any]], ki
     """A column whose cells are not all of one kind -> (분류, '<이름>(<글자>)', 그 칸들의 엑셀 행). 여러 열이면 read_table이 한 줄로 묶는다
     (집 PC 2026-11-13, MBOM: 글자로 저장된 숫자 한 칸이 열 전체를 글자로 만들고 'Scrap %>3'이 글자 비교였음)."""
     if kind == "숫자":
+        comma = [r for r, v in cells if _is_comma_number(v)]
+        if comma:
+            return ("쉼표 숫자", f"{name}({letter})", comma)
         txt = [r for r, v in cells if isinstance(v, str)]
         return ("글자로 저장된 숫자", f"{name}({letter})", txt) if txt and len(txt) < len(cells) else None
+    if kind == "날짜":
+        txt = [r for r, v in cells if isinstance(v, str)]
+        return ("글자 날짜", f"{name}({letter})", txt) if txt else None
     if kind != "글자":
         return None
+    sym = [r for r, v in cells if isinstance(v, str) and _NUM_SYMBOL.match(v.strip())]
+    if len(sym) >= max(2, len(cells) // 2):
+        return ("기호 붙은 숫자", f"{name}({letter})", sym)
     other = [r for r, v in cells if not (_is_number(v) or _is_number_text(v))]
     if other and len(other) <= max(1, len(cells) // 10) and len(other) < len(cells):
         return ("숫자 사이 글자", f"{name}({letter})", other)
@@ -498,7 +537,7 @@ def column_read_warning(name: str, letter: str, cells: List[Tuple[int, Any]], ki
 def column_read_warnings(notes: List[Tuple[str, str, List[int]]]) -> List[str]:
     """열마다 한 줄이면 같은 말이 여러 줄 되므로(공정 샘플 9열) 분류별로 한 줄로 묶는다."""
     out: List[str] = []
-    for cat in ("글자로 저장된 숫자", "숫자 사이 글자"):
+    for cat in ("글자로 저장된 숫자", "쉼표 숫자", "글자 날짜", "기호 붙은 숫자", "숫자 사이 글자"):
         group = [(label, rows) for c, label, rows in notes if c == cat]
         if not group:
             continue
@@ -509,11 +548,40 @@ def column_read_warnings(notes: List[Tuple[str, str, List[int]]]) -> List[str]:
         if cat == "글자로 저장된 숫자":
             n = f"{len(group[0][1])}칸" if one else "칸"
             out.append(f"{cols} 열의 글자로 저장된 숫자 {n}{where}을 숫자로 읽었습니다.")
+        elif cat == "쉼표 숫자":
+            out.append(f"{cols} 열은 천 단위 쉼표가 있는 숫자라 쉼표를 뺀 숫자로 읽었습니다{where}.")
+        elif cat == "글자 날짜":
+            out.append(f"{cols} 열은 글자로 적힌 날짜(2026.01.05 모양)라 날짜로 읽었습니다{where}.")
+        elif cat == "기호 붙은 숫자":
+            out.append(f"{cols} 열은 숫자에 기호가 붙어 있어 글자 열로 읽었습니다{where}. "
+                       "숫자 조건(>, <, >=, <=)과 sort는 기호를 뺀 숫자로 비교하지만, group --sum으로 더할 수는 없습니다.")
         else:
             n, ga = (f"칸 {len(group[0][1])}개", "가") if one else ("칸", "이")
             out.append(f"{cols} 열은 숫자 사이에 숫자가 아닌 {n}{where}{ga} 있어 글자 열로 읽었습니다. "
                        "숫자 조건(>, <, >=, <=)과 sort는 숫자로 읽히는 칸끼리 비교합니다.")
     return out
+
+
+def _two_row_header(grid: Dict[str, Any], header_row: int, header_vals: List[Any], data: List[Tuple[int, List[Any]]],
+                    j1: int, j2: int) -> Tuple[int, List[Any], List[Tuple[int, List[Any]]], Optional[Dict[str, Any]]]:
+    """머리글이 두 줄인 표(위는 병합한 묶음 이름, 아래가 진짜 이름)면 아래 줄을 머리글로 쓴다
+    (집 PC 2026-11-14: 위 줄이 머리글이 되어 열 이름이 '기본', '열_B'가 되고 진짜 머리글이 데이터 첫 행이 됐음).
+    조건: 머리글 줄에 두 칸 이상 병합이 있고, 바로 아래 줄이 글자로만 더 많이 차 있고, 그 아래로 데이터가 두 행 이상."""
+    if len(data) < 3:
+        return header_row, header_vals, data, None
+    merged_here = [m for m in grid.get("merged", [])
+                   if m[1] == header_row and m[2] > m[0] and m[0] <= grid["c1"] + j2 and m[2] >= grid["c1"] + j1]
+    if not merged_here:
+        return header_row, header_vals, data, None
+    row2, vals2 = data[0]
+    top = header_vals[j1:j2 + 1]
+    if sum(1 for v in vals2 if not _empty(v)) <= sum(1 for v in top if not _empty(v)):
+        return header_row, header_vals, data, None
+    if any(not isinstance(v, str) or not v.strip() for v in vals2 if not _empty(v)):
+        return header_row, header_vals, data, None
+    merged_names = [str(v).strip() for v in top if not _empty(v)]
+    names = [v if not _empty(v) else top[i] for i, v in enumerate(vals2)]
+    return row2, [None] * j1 + names, data[1:], {"row": row2, "above_row": header_row, "above": merged_names}
 
 
 def unit_row(data: List[Tuple[int, List[Any]]]) -> Optional[int]:
@@ -546,6 +614,15 @@ def convert_column(values: List[Any]) -> Tuple[List[Any], str, str]:
         if all(isinstance(v, int) or float(v).is_integer() for v in filled) and all(isinstance(v, int) for v in filled):
             return [None if _empty(v) else int(v) for v in values], "Int64", "숫자"
         return [None if _empty(v) else float(v) for v in values], "float64", "숫자"
+    if all(_is_number(v) or _is_number_text(v) or _is_comma_number(v) for v in filled) \
+            and any(_is_comma_number(v) for v in filled):
+        # 천 단위 쉼표가 있는 숫자 (글자로 저장된 숫자와 같은 종류: 숫자 값은 그대로, 쉼표만 뺌)
+        nums = [None if _empty(v) else (v if _is_number(v) else float(str(v).replace(",", ""))) for v in values]
+        if all(float(v).is_integer() for v in nums if v is not None):
+            return [None if v is None else int(v) for v in nums], "Int64", "숫자"
+        return [None if v is None else float(v) for v in nums], "float64", "숫자"
+    if filled and all(_text_date(v) is not None for v in filled):
+        return [None if _empty(v) else _text_date(v) for v in values], "datetime64[ns]", "날짜"
     if all(_is_number(v) or _is_number_text(v) for v in filled):
         # all numbers written as text (csv), or numbers mixed with a few numbers written as text (Excel's green triangle):
         # a number column (read_table warns about the mixed case). A code with a leading 0 (0102) is not a number.
@@ -624,16 +701,25 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     data: List[Tuple[int, List[Any]]] = []
     skipped_empty = 0
     after_gap = 0
-    for r, vals in rows[head_i + 1:]:
-        part = vals[j1:j2 + 1]
-        if all(_empty(v) for v in part):
+    for r, vals in rows[head_i + 1:]:                       # 표의 끝은 머리글 줄의 칸 안에서 본다 (지금까지와 같게)
+        if all(_empty(v) for v in vals[j1:j2 + 1]):
             if grid["explicit_end"]:
                 skipped_empty += 1
                 continue
             rest = [(rr, vv) for rr, vv in rows if rr > r and any(not _empty(x) for x in vv[j1:j2 + 1])]
             after_gap = len(rest)
             break
-        data.append((r, part))
+        data.append((r, list(vals)))
+    if not grid["explicit_end"] and data:
+        # 머리글 칸이 비어 있어도 값이 여러 행에 있으면 그 열도 표의 열이다 (집 PC 2026-11-14: 머리글이 두 줄인 표에서 G열이 통째로 빠졌음).
+        need = max(2, len(data) // 10)
+        extra = [j for j in range(len(header_vals)) if not (j1 <= j <= j2)
+                 and sum(1 for _, v in data if j < len(v) and not _empty(v[j])) >= need]
+        if extra:
+            added = sorted(set(extra) | {j1, j2})
+            j1, j2 = added[0], added[-1]
+    data = [(r, vals[j1:j2 + 1]) for r, vals in data]
+    header_row, header_vals, data, two_row = _two_row_header(grid, header_row, header_vals, data, j1, j2)
     units: Dict[str, str] = {}
     unit_at = unit_row(data)
     c0 = grid["c1"] + j1
@@ -671,6 +757,14 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     df = pd.DataFrame(cols)
     last = data[-1][0] if data else header_row
     area = f"{letters[0]}{header_row}:{letters[-1]}{last}"
+    if two_row:
+        warnings.append(f"머리글이 두 줄이라 아래 줄({two_row['row']}행)을 열 이름으로 썼습니다 "
+                        f"(위 줄 {two_row['above_row']}행의 {', '.join(two_row['above'][:5])}"
+                        + (" 등" if len(two_row["above"]) > 5 else "") + "은(는) 열 묶음 이름이라 쓰지 않음).")
+    no_name = [letters[j] for j, v in enumerate(header_vals[j1:j2 + 1]) if _empty(v)]
+    if no_name and not grid["explicit_end"]:
+        warnings.append(f"머리글이 비어 있지만 값이 있는 열 {len(no_name)}개({', '.join(no_name)})도 읽었습니다 "
+                        f"(이름은 열_{no_name[0]}처럼 붙임).")
     if renamed:
         warnings.append(f"도구가 행 번호에 쓰는 이름이라 열 이름을 바꿨습니다: {', '.join(renamed)}. "
                         "다른 표의 엑셀 행과 짝지으려면 join --on \"엑셀 행=엑셀 행번호\".")
@@ -791,7 +885,7 @@ def _cond_mask(series: Any, op: str, val: str, notes: Optional[List[str]] = None
     if op in (">", "<", ">=", "<=") and _NUM_TEXT.match(val.replace(",", "")) and not pd.api.types.is_datetime64_any_dtype(series):
         # a text column with numbers: compare as numbers, not as text ("18" > "3" is False as text; 집 PC 2026-11-13)
         num = float(val.replace(",", ""))
-        s = pd.to_numeric(text.str.strip(), errors="coerce")
+        s = as_numbers(series)
         bad = int((present & s.isna()).sum())
         if bad and notes is not None:
             notes.append(f"'{col}' 열은 글자 열이라 숫자로 읽히는 칸끼리 비교했습니다 (숫자가 아닌 칸 {bad}개는 조건 '{col}{op}{val}'에 맞지 않음으로 봄).")
@@ -1152,7 +1246,7 @@ def op_sort(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
         col = df[c]
         if pd.api.types.is_numeric_dtype(col) or pd.api.types.is_datetime64_any_dtype(col) or pd.api.types.is_bool_dtype(col):
             continue
-        num = pd.to_numeric(col.astype("string").str.strip(), errors="coerce")
+        num = as_numbers(col)
         filled = int(col.notna().sum())
         bad = int((col.notna() & num.isna()).sum())
         if filled and bad <= max(1, filled // 10) and bad < filled:
