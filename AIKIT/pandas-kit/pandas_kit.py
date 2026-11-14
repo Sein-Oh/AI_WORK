@@ -913,6 +913,11 @@ def _cond_mask(series: Any, op: str, val: str, notes: Optional[List[str]] = None
             num = float(val.replace(",", ""))
         except ValueError:
             num = None
+        if num is None and op in (">", "<", ">=", "<="):
+            raise rt.InputError(f"'{col}' 열은 숫자 열이라 '{val}'과(와) 크기를 비교할 수 없습니다. 조건 값을 숫자로 쓰세요 "
+                                f"(예: {col}{op}10). 글자로 비교하면 결과가 틀립니다.")
+        if num is None and notes is not None:
+            notes.append(f"'{col}' 열은 숫자 열인데 조건 값 '{val}'은(는) 숫자가 아니라 글자로 비교했습니다 (같은 칸이 없을 수 있음).")
         if num is not None:
             s = series.astype("Float64")
             res = {"=": s == num, "!=": s != num, ">": s > num, "<": s < num, ">=": s >= num, "<=": s <= num}[op]
@@ -1367,7 +1372,9 @@ def _select_needs_input(a: Any) -> rt.InputError:
     지금 표에서 고르는 명령과 Excel에 열린(저장된) 통합문서를 읽는 명령을 전체 명령으로 줌."""
     cands, argvs = [], []
     work = os.path.abspath(a.work) if getattr(a, "work", None) else current_work()
-    if work:
+    if work and (getattr(a, "where", None) or getattr(a, "columns", None)):
+        # 고를 조건·열이 있을 때만 '지금 표에서 고르기'를 권함: 아무것도 없는 select --from <지금 표>는 표를 그대로 복사할 뿐이라
+        # 경량 모델이 그것을 실행하고 "열린 엑셀을 읽었다"고 답할 수 있음 (집 PC 2026-11-13 4-2, 0.2.9)
         try:
             cur = Work(work).resolve(None, "--from")[0]
             cands.append(f"지금 표 {cur}에서 고르기")

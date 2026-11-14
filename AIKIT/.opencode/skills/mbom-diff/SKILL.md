@@ -4,7 +4,7 @@ description: MBOM(제조 BOM) 엑셀 두 판에서 무엇이 바뀌었는지 찾
 license: Proprietary
 compatibility: opencode
 metadata:
-  version: "0.3.0"
+  version: "0.1.1"
   platform: windows
 ---
 

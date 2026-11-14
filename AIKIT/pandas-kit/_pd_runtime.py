@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-VERSION = "0.2.8"
+VERSION = "0.2.9"
 TOOL_NAME = "pandas-kit"
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_ENV = "PANDAS_KIT_DATA_DIR"
@@ -437,6 +437,13 @@ class JsonArgumentParser(argparse.ArgumentParser):
         for act in self._actions:          # an unknown option reported by the root parser: the options of the sub-command used
             if isinstance(act, argparse._SubParsersAction) and given and given[0] in act.choices:
                 opts |= {o for a in act.choices[given[0]]._actions for o in a.option_strings}
+        for act in self._actions:          # a misspelt command name: [후보] (spelling only, the user confirms)
+            if isinstance(act, argparse._SubParsersAction) and given and not given[0].startswith("-") and given[0] not in act.choices:
+                near = difflib.get_close_matches(given[0], sorted(act.choices), n=3, cutoff=0.6)
+                if near:
+                    items = [next_command([c] + given[1:], f"{given[0]} 대신 {c}") for c in near]
+                    text = "[후보] " + " ".join(f"{i}) {c}" for i, c in enumerate(near, 1))
+                    return f" '{given[0]}' 명령은 없습니다. {text} (뜻이 같은지 사용자에게 확인)", items
         fixed, changes, unknown = [], [], []
         for a in given:
             key, eq, val = a.partition("=")

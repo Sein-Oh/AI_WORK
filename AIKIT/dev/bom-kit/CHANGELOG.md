@@ -2,6 +2,23 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
 
+## [0.1.1] - 2026-11-14
+
+### 수정 (저장소 점검에서 직접 써 보며)
+- Level 칸에 `inf`, `nan` 글자가 있으면 내부 오류(`OverflowError`, `ERROR:`)가 나던 것: Level이 아닌 행으로 보고 `warnings`로 알림.
+  수량의 `inf`, `nan`도 숫자가 아닌 수량으로 봄.
+- 원본 옆에 작업 폴더가 쌓이던 것 (실행할 때마다 `<파일 이름>_<시각>` 폴더 하나, `--find`만 바꿔 6번이면 6개, 멈춘 실행도 빈 폴더를 남김):
+  멈춘 실행(`STOP_RETRY:`)이 만든 폴더는 지우고, 같은 명령(같은 파일·시트·범위·열·찾는 말)을 다시 실행하면 앞 실행의 폴더를 지운다.
+  다른 `--find`, 다른 파일의 결과 폴더는 그대로 둔다 (`output_file`을 나중에 열 수 있게). pandas-kit 표시 파일이 있는 폴더만 지우고,
+  파일이 열려 있어 못 지우면 그대로 둔다 (stderr `[WARN]`). 어느 실행이 어느 폴더였는지는 `<데이터 폴더>/works.json`(최근 200개).
+- 틀린 명령 이름(`dif`)에 `[후보]`와 고친 전체 명령 (`_bom_runtime.py`, pandas-kit 0.2.9와 같음).
+
+### 스킬
+- `mbom-diff`, `where-used`의 `metadata.version`을 도구 버전과 같게 (전에는 스킬 스크립트 시절의 0.3.0, 0.2.0이 남아 실기 러너가
+  bom-kit 버전을 0.3.0으로 적음). 시험 `test_skill_versions_match_the_tool`.
+- 시험: `test_work_folders_do_not_pile_up_next_to_the_original`, `test_level_that_is_not_a_finite_number_is_a_skipped_row`,
+  `test_misspelt_command_name_gives_candidates`.
+
 ## [0.1.0] - 2026-11-14
 
 ### 구조
