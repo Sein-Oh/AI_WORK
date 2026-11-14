@@ -14,7 +14,7 @@ import openpyxl
 import pandas as pd
 import pytest
 
-from pk_helpers import KIT, command_args, make_bom, ok, recommended, run
+from pk_helpers import KIT, SCRIPT, command_args, make_bom, ok, recommended, run
 
 sys.path.insert(0, KIT)
 import _pd_runtime as rt  # noqa: E402
@@ -107,7 +107,7 @@ def test_select_file_finds_table_under_title_and_keeps_codes(env):
     assert cols["Part Number"]["letter"] == "D" and cols["Part Number"]["kind"] == "글자" and cols["Qty"]["kind"] == "숫자"
     work = out["work"]
     assert re.fullmatch(r"BOM_\d{10}", os.path.basename(work)) and os.path.dirname(work) == str(env["dir"])   # <파일 이름>_YYMMDDHHMM
-    shown = ok(env, "show")
+    shown = ok(env, "show", "--from", "df1")
     assert shown["rows"][0] == {"엑셀 행": 5, "Level": 1, "Parent": "TOP", "Part Number": "0102", "Qty": 2, "Maker": "A", "Desc": "볼트"}
     assert shown["truncated"] is False and shown["count"] == 4
 
@@ -130,7 +130,7 @@ def test_select_csv_cp949_leading_zero_and_mixed_columns(env):
     out = ok(env, "select", "--file", str(p))
     kinds = {c["name"]: c["kind"] for c in out["columns"]}
     assert kinds == {"품번": "글자", "수량": "숫자", "비고": "글자"}
-    rows = ok(env, "show")["rows"]
+    rows = ok(env, "show", "--from", "df1")["rows"]
     assert [r["품번"] for r in rows] == ["0102", "0105", "0200"] and rows[0]["엑셀 행"] == 2 and rows[1]["비고"] is None
 
 
@@ -140,7 +140,7 @@ def test_where_and_or_contains_and_letters(env):
     out = ok(env, "select", "--from", "df1", "--where", "Maker=A|B;Qty>=2", "--name", "a")
     assert out["count"] == 2 and "df1에서" in out["lineage"]
     assert ok(env, "select", "--from", "df1", "--where", "Desc~너", "--columns", "D,Qty")["count"] == 2
-    cols = [c["name"] for c in ok(env, "show")["columns"]]
+    cols = [c["name"] for c in ok(env, "show", "--from", "df2")["columns"]]
     assert cols == ["Part Number", "Qty"]
     zero = ok(env, "select", "--from", "df1", "--where", "Level=9")
     assert zero["count"] == 0 and "0건" in zero["agent_directive"] and "next_commands" not in zero
@@ -201,6 +201,8 @@ def test_hidden_rows_merged_cells_and_uncomputed_formulas_are_warned(env):
     out = ok(env, "select", "--file", path)
     text = " ".join(out["warnings"])
     assert "숨긴 행" in text and "병합한 칸 1곳" in text and "수식 칸 1개" in text
+    assert out["hidden_rows"] == [6]                                  # bom-kit이 결과에 든 숨긴 행을 알림 (0.2.10)
+    assert "hidden_rows" not in ok(env, "select", "--file", path, "--where", "엑셀 행!=6")
 
 
 def test_empty_row_ends_table_and_rest_is_warned(env):
@@ -232,6 +234,10 @@ def test_title_block_above_is_not_taken_as_the_table(env):
     assert out["anchor"]["range"] == "B4:D9" and out["count"] == 5
     assert any("표 위의 다른 내용 2행(엑셀 행 1~2)" in w for w in out["warnings"])
     assert any("빈 행 아래" in w for w in out["warnings"])
+    ws.delete_rows(1)                                                        # 제목 한 행: '엑셀 행 1' (1~1이 아님, 0.2.10)
+    wb.save(env["dir"] / "titled1.xlsx")
+    one = ok(env, "select", "--file", str(env["dir"] / "titled1.xlsx"))
+    assert any("표 위의 다른 내용 1행(엑셀 행 1)은" in w for w in one["warnings"])
     narrow = ok(env, "select", "--file", str(path), "--range", "B1:D2")      # 범위를 주면 그 범위가 표
     assert narrow["count"] == 1 and narrow["anchor"]["header_row"] == 1
 
@@ -273,7 +279,7 @@ def test_select_without_file_or_from_stops_and_gives_full_commands(env, monkeypa
     assert "읽을 파일 경로를 물어" in out["message"] and "[추천]" not in out["message"]
     out = select_alone([{"path": other, "name": "B2.xlsx", "saved": True}])
     assert recommended(out["message"]) == ["select", "--file", other]
-    # 조건이 있으면 지금 표에서 고르는 명령을 줌
+    # 조건이 있으면 만든 표에서 고르는 명령을 줌: 표가 하나면 [추천]
     monkeypatch.setattr(rt, "open_workbooks", lambda: [])
     with pytest.raises(SystemExit):
         pk.main(["select", "--where", "Level=1"])
@@ -283,7 +289,17 @@ def test_select_without_file_or_from_stops_and_gives_full_commands(env, monkeypa
     with pytest.raises(SystemExit):
         pk.main(["select", "--where", "Level=1"])
     out = json.loads(capsys.readouterr().out)
-    assert "[후보] 1) 지금 표 df1에서 고르기 2) Excel에 열린 B2.xlsx 읽기" in out["message"]
+    assert "[후보] 1) 표 df1(4행)에서 고르기 2) Excel에 열린 B2.xlsx 읽기" in out["message"]
+    # 표가 여럿이면 마지막 표를 짐작하지 않고 모두 [후보] (집 PC 2026-11-14 P7: 마지막 표가 0행이라 0건이 될 뻔함, 0.2.10)
+    monkeypatch.setattr(rt, "open_workbooks", lambda: [])
+    ok(env, "select", "--from", "df1", "--where", "Qty=abc", "--name", "df4")
+    with pytest.raises(SystemExit):
+        pk.main(["select", "--where", "Level=1"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["error_type"] == "needs_user_decision" and "[추천]" not in out["message"]
+    assert "[후보] 1) 표 df1(4행)에서 고르기 2) 표 df4(0행)에서 고르기" in out["message"]
+    assert [command_args(c["command"]) for c in out["confirm_commands"]] == [
+        ["select", "--where", "Level=1", "--from", "df1"], ["select", "--where", "Level=1", "--from", "df4"]]
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +312,7 @@ def test_diff_adds_deletes_changed_cells_with_rows_and_paint_files(env):
     ok(env, "select", "--file", new, "--name", "df2")
     out = ok(env, "diff", "--old", "df1", "--new", "df2", "--on", "Parent,Part Number")
     assert out["summary"] == "추가 1행, 삭제 1행, 바뀐 칸 2곳" and out["count"] == 4
-    rows = ok(env, "show")["rows"]
+    rows = ok(env, "show", "--from", "df3")["rows"]
     changed = {(r["Part Number"], r["열"]): (r["옛 값"], r["새 값"], r["df1 행"], r["df2 행"]) for r in rows if r["구분"] == "바뀜"}
     assert changed == {("0200", "Maker"): ("A", "B", 7, 6), ("0105", "Qty"): (3, 5, 8, 7)}
     assert [(r["구분"], r["df1 행"], r["df2 행"]) for r in rows if r["구분"] != "바뀜"] == [("삭제", 6, None), ("추가", None, 8)]
@@ -317,7 +333,7 @@ def test_diff_same_number_in_int_and_decimal_columns_is_not_a_change(env):
     ok(env, "select", "--file", new, "--name", "df2")
     out = ok(env, "diff", "--old", "df1", "--new", "df2", "--on", "Parent,Part Number")
     assert out["summary"] == "추가 0행, 삭제 0행, 바뀐 칸 1곳"
-    row = ok(env, "show")["rows"][0]
+    row = ok(env, "show", "--from", "df3")["rows"][0]
     assert (row["열"], row["옛 값"], row["새 값"]) == ("Qty", 3, 3.5)
 
 def test_diff_refuses_duplicate_keys(env):
@@ -336,7 +352,7 @@ def test_join_only_stack_keep_both_row_numbers(env):
     assert j["count"] == 3 and j["table"] == "df3"
     # 집 PC 2026-11-13: "df1와 df2를"처럼 받침에 맞지 않는 조사가 preview에 나왔음
     assert "df1, df2을(를) Parent,Part Number 기준으로 짝 맞춤" in j["preview"] and "df1와" not in j["preview"]
-    row = ok(env, "show")["rows"][0]
+    row = ok(env, "show", "--from", "df3")["rows"][0]
     assert row["df1 행"] == 5 and row["df2 행"] == 5 and "Qty_df2" in row
     o = ok(env, "only", "--left", "df2", "--right", "df1", "--on", "Parent,Part Number", "--name", "새것")
     assert o["count"] == 1 and ok(env, "show", "--from", "새것")["rows"][0]["Part Number"] == "0300"
@@ -378,7 +394,7 @@ def test_group_counts_sums_and_warns_mixed_units(env):
         for r, u in enumerate(["EA", "KG", "EA", "EA"], start=5):
             ws.cell(row=r, column=8, value=u)
     ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", extra=extra), "--name", "df1")
-    g = ok(env, "group", "--by", "Maker", "--sum", "Qty", "--name", "g")
+    g = ok(env, "group", "--from", "df1", "--by", "Maker", "--sum", "Qty", "--name", "g")
     rows = ok(env, "show", "--from", "g")["rows"]
     assert g["count"] == 3 and rows[0] == {"Maker": "A", "행 수": 2, "Qty 합계": 3, "엑셀 행 목록": "5, 7"}
     assert not g.get("warnings")                                        # A·C는 EA만, B는 KG만
@@ -395,7 +411,7 @@ def test_group_names_the_empty_value_group(env):
     """빈 값 묶음은 null이 아니라 '(빈 칸)' (사용자 결정 2026-11-14)."""
     rows = [(1, "TOP", "0102", 2, "A", "x"), (1, "TOP", "0105", 3, None, "x"), (1, "TOP", "0200", 4, None, "x")]
     ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", rows=rows), "--name", "df1")
-    g = ok(env, "group", "--by", "Maker", "--sum", "Qty")
+    g = ok(env, "group", "--from", "df1", "--by", "Maker", "--sum", "Qty")
     got = [(r["Maker"], r["행 수"], r["Qty 합계"]) for r in ok(env, "show", "--from", g["table"])["rows"]]
     assert got == [("A", 1, 2), ("(빈 칸)", 2, 7)]
 
@@ -404,7 +420,7 @@ def test_sort_keeps_excel_rows_and_puts_empty_cells_last(env):
     rows = [(1, "TOP", "0102", 2, "A", "x"), (2, "0102", "0105", None, "B", "x"), (1, "TOP", "0200", 9, "A", "x"),
             (2, "0200", "0105", 2, "C", "x")]
     ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", rows=rows), "--name", "df1")
-    up = ok(env, "sort", "--by", "Qty", "--name", "up")
+    up = ok(env, "sort", "--from", "df1", "--by", "Qty", "--name", "up")
     assert "작은 것부터" in up["preview"]
     assert [r["엑셀 행"] for r in ok(env, "show", "--from", "up")["rows"]] == [5, 8, 7, 6]     # 같은 값은 표 순서, 빈 칸은 끝
     ok(env, "sort", "--from", "df1", "--by", "Maker,Qty", "--desc", "--name", "down")
@@ -422,7 +438,7 @@ def test_undo_and_redefined_name_warns_dependents(env):
     again = ok(env, "select", "--from", "df1", "--where", "Level=1", "--name", "df1")
     assert any("df2은(는) 옛 df1 기준" in w for w in again["warnings"])
     u = ok(env, "undo")
-    assert u["removed"] == "df1" and u["current"] == "df2" and "그 전 표를 다시 가리킵니다" in u["preview"]
+    assert u["removed"] == "df1" and u["tables"] == ["df1", "df2"] and "남은 표: df1, df2" in u["preview"] and "그 전 표를 다시 가리킵니다" in u["preview"]
     assert ok(env, "show", "--from", "df1")["count"] == 4
     ok(env, "undo")
     ok(env, "undo")
@@ -446,10 +462,10 @@ def test_new_then_work_option_returns_to_old_work(env):
     path = make_bom(env["dir"] / "BOM.xlsx")
     work = ok(env, "select", "--file", path)["work"]
     assert ok(env, "new")["previous_work"] == work
-    code, out = run(env, "show")
+    code, out = run(env, "show", "--from", "df1")
     assert code == 1 and "지금 작업 폴더가 없습니다" in out["message"]
-    assert ok(env, "show", "--work", work)["table"] == "df1"
-    assert ok(env, "show")["table"] == "df1"              # --work로 돌아간 폴더가 지금 작업 폴더
+    assert ok(env, "show", "--from", "df1", "--work", work)["table"] == "df1"
+    assert ok(env, "show", "--from", "df1")["table"] == "df1"              # --work로 돌아간 폴더가 지금 작업 폴더
     time.sleep(1.1)
     w2 = ok(env, "new") and ok(env, "select", "--file", path)["work"]
     assert w2 != work and os.path.dirname(w2) == os.path.dirname(work)
@@ -460,7 +476,7 @@ def test_changed_source_is_warned_with_command_to_read_again(env):
     ok(env, "select", "--file", path, "--range", "B4:G8", "--name", "df1")
     time.sleep(1.1)
     make_bom(path, rows=[(1, "TOP", "9999", 1, "A", "x")])
-    out = ok(env, "show")
+    out = ok(env, "show", "--from", "df1")
     w = " ".join(out["warnings"])
     assert "읽은 뒤 바뀌었습니다" in w and "select --file" in w and "--range B4:G8" in w and "--name df1" in w
 
@@ -468,7 +484,7 @@ def test_changed_source_is_warned_with_command_to_read_again(env):
 def test_show_truncates_at_20_rows_with_full_result_file(env):
     rows = [(1, "TOP", f"{i:04d}", i, "A", "x") for i in range(30)]
     ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", rows=rows))
-    out = ok(env, "show")
+    out = ok(env, "show", "--from", "df1")
     assert out["truncated"] is True and out["shown"] == 20 and out["count"] == 30
     full = pd.read_csv(out["full_result_file"], encoding="utf-8-sig", dtype=str)
     assert len(full) == 30 and full["Part Number"].iloc[0] == "0000" and "엑셀 행" in full.columns
@@ -477,7 +493,7 @@ def test_show_truncates_at_20_rows_with_full_result_file(env):
     more = ok(env, *command_args(nxt))
     assert more["start"] == 21 and more["shown"] == 10 and more["rows"][0]["엑셀 행"] == 25 and "next_commands" not in more
     assert "21~30번째 행" in more["preview"]
-    code, err = run(env, "show", "--start", "99")
+    code, err = run(env, "show", "--from", "df1", "--start", "99")
     assert code == 1 and recommended(err["message"])[-2:] == ["--start", "1"]
 
 
@@ -488,18 +504,18 @@ def test_show_truncates_at_20_rows_with_full_result_file(env):
 def test_export_new_file_timestamp_overwrite_and_never_the_source(env):
     path = make_bom(env["dir"] / "BOM.xlsx")
     ok(env, "select", "--file", path, "--where", "Level=2", "--name", "하위")
-    out = ok(env, "export")
+    out = ok(env, "export", "--from", "하위")
     assert out["agent_directive"].startswith("VERIFIED:") and out["output_file"].endswith("하위.xlsx")
     ws = openpyxl.load_workbook(out["output_file"]).active
     assert [c.value for c in ws[1]][:3] == ["엑셀 행", "Level", "Parent"] and ws["D2"].value == "0105"
-    again = ok(env, "export")
+    again = ok(env, "export", "--from", "하위")
     assert again["output_file"] != out["output_file"] and "--overwrite" in again["recovered"][0]
-    assert ok(env, "export", "--overwrite")["output_file"] == out["output_file"]
-    csv_out = ok(env, "export", "--save", "하위.csv")
+    assert ok(env, "export", "--from", "하위", "--overwrite")["output_file"] == out["output_file"]
+    csv_out = ok(env, "export", "--from", "하위", "--save", "하위.csv")
     assert pd.read_csv(csv_out["output_file"], encoding="utf-8-sig", dtype=str)["Part Number"].tolist() == ["0105", "0105"]
-    code, err = run(env, "export", "--save", path, "--overwrite")
+    code, err = run(env, "export", "--from", "하위", "--save", path, "--overwrite")
     assert code == 1 and "원본 파일" in err["message"]
-    code, err = run(env, "export", "--save", "x.pdf")
+    code, err = run(env, "export", "--from", "하위", "--save", "x.pdf")
     assert code == 1 and recommended(err["message"])[-2:] == ["--save", "x.xlsx"]
 
 
@@ -521,24 +537,24 @@ def test_chart_kinds_save_png_and_verify(env, kind, x):
 def test_chart_sums_repeated_x_limits_bars_and_checks_columns(env):
     rows = [(1, "TOP", f"{i:04d}", 1, "A" if i % 2 else "B", "x") for i in range(40)]
     ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", rows=rows), "--name", "df1")
-    out = ok(env, "chart", "--x", "Maker", "--y", "Qty")
+    out = ok(env, "chart", "--from", "df1", "--x", "Maker", "--y", "Qty")
     assert out["count"] == 2 and any("합계로" in w for w in out["warnings"])
-    many = ok(env, "chart", "--x", "Part Number", "--y", "Qty,Level")
+    many = ok(env, "chart", "--from", "df1", "--x", "Part Number", "--y", "Qty,Level")
     assert many["count"] == 30 and many["truncated"] is True and many["output_file"] != out["output_file"]
     assert "--overwrite" in many["recovered"][0]
-    code, err = run(env, "chart", "--y", "Desc")
+    code, err = run(env, "chart", "--from", "df1", "--y", "Desc")
     assert code == 1 and "[후보] 1) Level 2) Qty" in err["message"] and len(err["confirm_commands"]) == 2
-    code, err = run(env, "chart", "--kind", "pie", "--x", "Maker", "--y", "Qty,Level")
+    code, err = run(env, "chart", "--from", "df1", "--kind", "pie", "--x", "Maker", "--y", "Qty,Level")
     assert code == 1 and recommended(err["message"])[-2:] == ["--y", "Qty"]
-    code, err = run(env, "chart", "--kind", "pie", "--y", "Qty")
+    code, err = run(env, "chart", "--from", "df1", "--kind", "pie", "--y", "Qty")
     assert code == 1 and "--x가 필요합니다" in err["message"]
-    code, err = run(env, "chart", "--y", "Qty", "--save", "그림.jpg")
+    code, err = run(env, "chart", "--from", "df1", "--y", "Qty", "--save", "그림.jpg")
     assert code == 1 and recommended(err["message"])[-2:] == ["--save", "그림.png"]
-    line = ok(env, "chart", "--kind", "line", "--x", "Maker", "--y", "Qty")     # 사용자 결정 2026-11-14: 선은 합계하지 않고 경고
+    line = ok(env, "chart", "--from", "df1", "--kind", "line", "--x", "Maker", "--y", "Qty")     # 사용자 결정 2026-11-14: 선은 합계하지 않고 경고
     warn = next(w for w in line["warnings"] if "오가며" in w)
     assert line["count"] == 40 and command_args(warn.split("보려면 ")[1].split(" 로 ")[0])[-6:] == ["--kind", "bar", "--x", "Maker", "--y", "Qty"]
-    assert not any("오가며" in w for w in ok(env, "chart", "--kind", "line", "--x", "Part Number", "--y", "Qty").get("warnings", []))
-    named = ok(env, "chart", "--y", "Qty", "--save", "수량", "--title", "부품별 수량")
+    assert not any("오가며" in w for w in ok(env, "chart", "--from", "df1", "--kind", "line", "--x", "Part Number", "--y", "Qty").get("warnings", []))
+    named = ok(env, "chart", "--from", "df1", "--y", "Qty", "--save", "수량", "--title", "부품별 수량")
     assert named["output_file"] == os.path.join(named["work"], "수량.png")
 
 def test_chart_warns_when_units_are_mixed(env):
@@ -548,7 +564,7 @@ def test_chart_warns_when_units_are_mixed(env):
         for r, u in enumerate(["EA", "KG", "EA", "EA"], start=5):
             ws.cell(row=r, column=8, value=u)
     ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", extra=extra), "--name", "df1")
-    out = ok(env, "chart", "--x", "Maker", "--y", "Qty")
+    out = ok(env, "chart", "--from", "df1", "--x", "Maker", "--y", "Qty")
     warn = next(w for w in out["warnings"] if "'UoM' 열의 단위가 여러 가지(EA, KG)" in w)
     assert "더해 그렸습니다" in warn and "select --from df1 --where UoM=EA" in warn and "pandas_kit.py" in warn
     ok(env, "select", "--from", "df1", "--where", "UoM=EA", "--name", "ea")
@@ -557,7 +573,7 @@ def test_chart_warns_when_units_are_mixed(env):
 
 def test_chart_of_empty_table_is_zero(env):
     ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx"), "--where", "Level=9", "--name", "없음")
-    out = ok(env, "chart", "--y", "Qty")
+    out = ok(env, "chart", "--from", "없음", "--y", "Qty")
     assert out["count"] == 0 and "0건" in out["agent_directive"] and "output_file" not in out
 
 
@@ -708,7 +724,7 @@ def test_unit_row_under_the_header_is_read_as_column_units(env):
     assert out["count"] == 3 and cols["반응온도"]["kind"] == "숫자" and cols["반응온도"]["unit"] == "°C"
     assert cols["유량"]["unit"] == "L/min" and "unit" not in cols["비고"]
     assert any("머리글 아래 4행(°C, L/min)은 데이터가 아니라 열 단위로" in w for w in out["warnings"])
-    assert ok(env, "show")["rows"][0]["엑셀 행"] == 5                                  # 단위 행(4) 다음부터 데이터
+    assert ok(env, "show", "--from", "p")["rows"][0]["엑셀 행"] == 5                                  # 단위 행(4) 다음부터 데이터
     assert ok(env, "select", "--from", "p", "--where", "유량<10")["count"] == 1        # 숫자 열이라 숫자 비교
     kept = ok(env, "select", "--from", "p", "--columns", "반응온도")
     assert kept["columns"][0]["unit"] == "°C"                                          # 단계를 거쳐도 단위는 남음
@@ -719,7 +735,7 @@ def test_a_text_row_that_is_not_units_is_kept_as_data(env):
     rows = [("업체", "담당", "수량"), ("한빛볼트", "김", 3), ("대성", "이", 5), ("미래", "박", 7)]
     out = ok(env, "select", "--file", _sheet(env["dir"] / "list.xlsx", rows), "--name", "a")
     assert out["count"] == 3 and not any("단위" in w for w in out.get("warnings", []))
-    assert ok(env, "show")["rows"][0]["업체"] == "한빛볼트"
+    assert ok(env, "show", "--from", "a")["rows"][0]["업체"] == "한빛볼트"
     mixed = [("코드", "수량"), ("A-1", 3), ("A-2", 5), ("A-3", 7)]                      # 글자 열 하나뿐: 단위 행 아님
     out2 = ok(env, "select", "--file", _sheet(env["dir"] / "m.xlsx", mixed), "--name", "b")
     assert out2["count"] == 3 and not any("단위" in w for w in out2.get("warnings", []))
@@ -729,8 +745,8 @@ def test_sort_orders_a_text_number_column_as_numbers(env):
     # 집 PC 2026-11-14: 글자 열을 글자 순서로 정렬해 유량 5.02를 10.02보다 크다고 했고 알리지도 않았음
     rows = [("유량", "비고"), (10.02, "a"), (5.02, "b"), (9.5, "c"), ("측정 안 함", "d"), (14.1, "e")]
     ok(env, "select", "--file", _sheet(env["dir"] / "f.xlsx", rows), "--name", "f")
-    assert {c["name"]: c["kind"] for c in ok(env, "show")["columns"]}["유량"] == "글자"
-    up = ok(env, "sort", "--by", "유량", "--name", "up")
+    assert {c["name"]: c["kind"] for c in ok(env, "show", "--from", "f")["columns"]}["유량"] == "글자"
+    up = ok(env, "sort", "--from", "f", "--by", "유량", "--name", "up")
     assert any("숫자로 읽히는 칸끼리 숫자로 정렬" in w and "1개는 맨 뒤" in w for w in up["warnings"])
     vals = [r["유량"] for r in ok(env, "show", "--from", "up")["rows"]]
     assert vals == ["5.02", "9.5", "10.02", "14.1", "측정 안 함"]
@@ -777,7 +793,7 @@ def test_two_row_header_uses_the_lower_row_and_keeps_every_column(env):
     assert names == ["업체", "품번", "수량", "단가", "합계", "요청일", "입고일"] and out["count"] == 4
     assert out["anchor"]["range"] == "A4:G8" and out["anchor"]["header_row"] == 4
     assert any("머리글이 두 줄이라 아래 줄(4행)" in w and "기본, 금액, 납기" in w for w in out["warnings"])
-    rows = ok(env, "show")["rows"]
+    rows = ok(env, "show", "--from", "구매")["rows"]
     assert rows[0]["엑셀 행"] == 5 and rows[0]["업체"] == "한빛볼트" and rows[0]["입고일"] == "2026-01-09"
 
 
@@ -802,8 +818,8 @@ def test_thousands_separator_currency_and_text_dates(env):
     assert any("수량(C), 합계(E) 열은 천 단위 쉼표가 있는 숫자라" in w for w in out["warnings"])
     assert any("요청일(F) 열은 글자로 적힌 날짜" in w for w in out["warnings"])
     assert any("단가(D) 열은 숫자에 기호가 붙어" in w and "group --sum으로 더할 수는 없습니다" in w for w in out["warnings"])
-    assert ok(env, "show")["rows"][0]["수량"] == 1200                      # 값은 같고 쉼표만 뺌
-    g = ok(env, "group", "--by", "업체", "--sum", "합계", "--name", "업체별")
+    assert ok(env, "show", "--from", "구매")["rows"][0]["수량"] == 1200                      # 값은 같고 쉼표만 뺌
+    g = ok(env, "group", "--from", "구매", "--by", "업체", "--sum", "합계", "--name", "업체별")
     assert {r["업체"]: r["합계 합계"] for r in ok(env, "show", "--from", "업체별")["rows"]}["한빛볼트"] == 2592000
     assert ok(env, "select", "--from", "구매", "--where", "요청일>=2026-02-01")["count"] == 2
     s = ok(env, "sort", "--from", "구매", "--by", "단가", "--desc", "--name", "비싼")
@@ -830,7 +846,7 @@ def test_a_blank_row_inside_the_table_asks_which_range(env):
     assert "2) A1:C4만 (3행)" in out["message"] and "3) A6:C8만 (2행)" in out["message"]   # 덩어리마다 첫 줄은 머리글
     whole = ok(env, *command_args(out["confirm_commands"][0]["command"]))
     assert whole["count"] == 6 and any("범위 안의 빈 행 1개는 뺐습니다" in w for w in whole["warnings"])
-    assert [r["Part Number"] for r in ok(env, "show")["rows"]][:2] == ["0001", "0002"]
+    assert [r["Part Number"] for r in ok(env, "show", "--from", "a")["rows"]][:2] == ["0001", "0002"]
     lower = ok(env, *command_args(out["confirm_commands"][2]["command"]))
     assert lower["count"] == 2                                          # 고른 덩어리만 읽기도 됨
     small = [("Level", "Part Number", "Qty")] + [(1, f"{i:04d}", i) for i in range(1, 7)]
@@ -882,5 +898,88 @@ def test_number_column_with_a_value_that_is_not_a_number(env):
 
 def test_misspelt_command_name_gives_candidates(env):
     code, out = run(env, "selct", "--file", "x.xlsx")
-    assert code == 2 and "'selct' 명령은 없습니다. [후보] 1) select" in out["message"]
+    assert code == 2 and out["message"].startswith("CLI 인자 오류: 'selct' 명령은 없습니다. [후보] 1) select")
+    assert "invalid choice" not in out["message"]                    # argparse 영어 문장은 뺌 (0.2.10)
     assert command_args(out["confirm_commands"][0]["command"]) == ["select", "--file", "x.xlsx"]
+
+
+def test_from_is_always_needed_and_never_guessed(env):
+    """--from을 빼면 마지막 표로 짐작하지 않고 멈춤 (사용자 결정 2026-11-14, 0.2.10).
+    표가 하나면 그 표를 넣은 [추천], 여럿이면 표마다 [후보]와 같은 번호의 confirm_commands."""
+    path = make_bom(env["dir"] / "BOM.xlsx")
+    ok(env, "select", "--file", path, "--name", "df1")
+    for args in (["show"], ["group", "--by", "Maker"], ["sort", "--by", "Qty"], ["chart", "--y", "Qty"], ["export"]):
+        code, out = run(env, *args)
+        assert code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+        assert out["message"].startswith("--from이(가) 없습니다. 쓸 표를 늘 --from <표 이름>으로 적습니다"), out
+        assert recommended(out["message"]) == args + ["--from", "df1"]
+    ok(env, "select", "--from", "df1", "--where", "Qty=abc", "--name", "빈표")
+    code, out = run(env, "show")
+    assert code == 1 and out["error_type"] == "needs_user_decision" and "[추천]" not in out["message"]
+    assert "[후보] 1) 표 df1(4행) 2) 표 빈표(0행)" in out["message"]
+    assert [command_args(c["command"]) for c in out["confirm_commands"]] == [["show", "--from", "df1"], ["show", "--from", "빈표"]]
+
+
+def test_two_runs_at_once_keep_both_steps_and_the_right_snapshots(env):
+    """같은 작업 폴더에 두 명령을 동시에 (Fable 검토 2026-11-14 A1): 잠금이 없을 때 한쪽 단계가 기록에서 사라지고
+    기록과 스냅샷이 뒤바뀐 채 VERIFIED였음. 이제 둘 다 기록에 남고, 표마다 자기 내용."""
+    import subprocess
+    path = make_bom(env["dir"] / "BOM.xlsx")
+    work = ok(env, "select", "--file", path, "--name", "df1")["work"]
+    for i in range(3):
+        procs = [subprocess.Popen([sys.executable, SCRIPT, "select", "--from", "df1", "--where", w, "--name", f"{n}{i}"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=str(env["dir"]), env=os.environ.copy())
+                 for n, w in (("a", "Level=1"), ("b", "Qty>=0"))]
+        outs = [json.loads(p.communicate(timeout=120)[0].decode("utf-8").strip().splitlines()[-1]) for p in procs]
+        assert all(o["status"] == "ok" and o["verified"] for o in outs), outs
+    with open(os.path.join(work, "steps.json"), encoding="utf-8") as f:
+        names = [s["name"] for s in json.load(f)["steps"]]
+    assert sorted(names) == sorted(["df1"] + [f"{n}{i}" for i in range(3) for n in "ab"])
+    level1, level2 = ok(env, "show", "--from", "a0")["count"], ok(env, "show", "--from", "b0")["count"]
+    for i in range(3):
+        assert ok(env, "show", "--from", f"a{i}")["count"] == level1 and ok(env, "show", "--from", f"b{i}")["count"] == level2
+    assert level1 != level2 and not os.path.exists(os.path.join(work, ".lock"))
+
+
+def test_a_snapshot_that_does_not_match_the_record_is_rebuilt(env):
+    """스냅샷이 다른 단계의 것이면(기록과 다름) 버리고 기록으로 다시 만듦 (recovered)."""
+    path = make_bom(env["dir"] / "BOM.xlsx")
+    work = ok(env, "select", "--file", path, "--name", "df1")["work"]
+    ok(env, "select", "--from", "df1", "--where", "Level=1", "--name", "one")
+    ok(env, "select", "--from", "df1", "--where", "Level=2", "--name", "two")
+    import shutil
+    shutil.copyfile(os.path.join(work, "tables", "s3.pkl"), os.path.join(work, "tables", "s2.pkl"))   # one 자리에 two의 내용
+    out = ok(env, "show", "--from", "one")
+    assert out["count"] == ok(env, "select", "--from", "df1", "--where", "Level=1", "--name", "check")["count"]
+    assert any("기록과 다름" in r for r in out.get("recovered", []))
+
+
+def test_source_saved_with_only_formatting_is_quiet_and_only_used_tables_are_checked(env):
+    """원본이 저장됐지만 값이 같으면(바뀐 칸 칠하기) 경고 없이 기록만 갱신, 다르면 쓰는 표의 원본만 경고
+    (Fable 검토 2026-11-14 A4, 사용자 결정: 칠한 뒤 명령마다 '다시 읽으려면' 경고가 붙었음)."""
+    import openpyxl
+    from openpyxl.styles import PatternFill
+    a, b = make_bom(env["dir"] / "A.xlsx"), make_bom(env["dir"] / "B.xlsx")
+    ok(env, "select", "--file", a, "--name", "ta")
+    ok(env, "select", "--file", b, "--name", "tb")
+    time.sleep(1.1)
+    wb = openpyxl.load_workbook(a)                                             # 칠하기만 하고 저장 (값은 그대로)
+    wb.active["B5"].fill = PatternFill("solid", fgColor="FFFF00")
+    wb.save(a)
+    out = ok(env, "show", "--from", "ta")
+    assert not any("바뀌었습니다" in w for w in out.get("warnings", []))
+    time.sleep(1.1)
+    make_bom(b, rows=[(1, "TOP", "9999", 1, "A", "x")])                        # B는 값이 바뀜
+    assert not any("바뀌었습니다" in w for w in ok(env, "show", "--from", "ta").get("warnings", []))   # A의 표에는 경고 없음
+    w = " ".join(ok(env, "show", "--from", "tb")["warnings"])
+    assert "B.xlsx이(가) 읽은 뒤 바뀌었습니다 (값이 다름)" in w and "--name tb" in w
+
+
+def test_a_name_that_now_points_to_another_file_is_warned(env):
+    """--name이 다른 원본의 표를 가리게 되면 늘 경고 (Fable 검토 2026-11-14 A3, 사용자 결정)."""
+    a, b = make_bom(env["dir"] / "A.xlsx"), make_bom(env["dir"] / "B.xlsx")
+    ok(env, "select", "--file", a, "--name", "df1")
+    out = ok(env, "select", "--file", b, "--name", "df1")
+    assert "표 df1은(는) A.xlsx에서 만든 표였는데, 이제 B.xlsx의 표입니다 (옛 df1은 undo로 되돌릴 수 있음)." in out["warnings"]
+    again = ok(env, "select", "--file", b, "--name", "df1")                     # 같은 원본을 다시 읽으면 경고 없음
+    assert not any("만든 표였는데" in w for w in again.get("warnings", []))

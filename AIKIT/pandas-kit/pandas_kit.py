@@ -25,6 +25,8 @@ import os
 import pickle
 import re
 import sys
+import time
+from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,6 +36,9 @@ import _pd_runtime as rt  # noqa: E402
 TABLE_EXTS = (".xlsx", ".xlsm", ".csv")
 SHOW_MAX = 20                      # rows in the JSON of show (R2: the rest in a csv file)
 LIST_MAX = 30                      # columns listed in a JSON answer
+LOCK_FILE = ".lock"                # 작업 기록을 고치는 동안 잡는 잠금 (같은 작업 폴더의 동시 실행)
+LOCK_WAIT, LOCK_STALE = 20.0, 120.0  # 잠금을 기다리는 초, 이보다 오래된 잠금은 끝나지 않은 실행이 남긴 것으로 보고 버림
+TABLE_CHOICES = 6                  # select에 --file·--from이 없을 때 [후보]로 보이는 표 수 (최근 것부터)
 READ_ONLY_BYTES = 30 * 1024 * 1024  # bigger workbooks are read in openpyxl read-only mode (no hidden-row/merged-cell check)
 MARKER = ".created_by_pandas-kit"
 STEPS_FILE = "steps.json"
@@ -229,14 +234,22 @@ class Work:
         return next(s for s in self.steps if s["id"] == sid)
 
     def resolve(self, name: Optional[str], option: str) -> Tuple[str, int]:
-        """Table name -> (name, step id). None -> the current table (the last step)."""
+        """Table name -> (name, step id). 표 이름은 늘 적어야 한다: 빠지면 마지막 표로 짐작하지 않고 멈춘다
+        (사용자 결정 2026-11-14, 집 PC P7: 마지막 표가 0행이었음). 표가 하나면 [추천], 여럿이면 [후보] (최근 TABLE_CHOICES개, 행 수)."""
         names = self.names()
         if not names:
             raise rt.InputError("아직 만든 표가 없습니다. 먼저 select --file로 파일을 읽으세요: "
                                 f"python {rt.quote_arg(rt.script_path())} select --file \"<파일>\"")
         if not name:
-            cur = self.current_name()
-            return cur, names[cur]
+            head = f"{option}이(가) 없습니다. 쓸 표를 늘 {option} <표 이름>으로 적습니다 (도구가 짐작하지 않음)"
+            tables = sorted(names.items(), key=lambda kv: kv[1])[-TABLE_CHOICES:]
+            if len(tables) == 1:
+                raise rt.InputError(f"{head}. [추천] {rt.full_command(argv_setting(option, tables[0][0]))}")
+            labels = [f"표 {t}" + (f"({self.step(sid).get('rows')}행)" if self.step(sid).get("rows") is not None else "")
+                      for t, sid in tables]
+            err = rt.ask(labels, [argv_setting(option, t) for t, _ in tables], "쓸 표")
+            err.args = (f"{head}. " + err.args[0],) + err.args[1:]
+            raise err
         if name in names:
             return name, names[name]
         close = difflib.get_close_matches(name, list(names), n=5, cutoff=0.5) or list(names)[-5:]
@@ -249,20 +262,65 @@ class Work:
             n += 1
         return f"df{n}"
 
+    # -- lock: 기록 읽기-고치기-쓰기를 한 실행씩 (Fable 검토 2026-11-14 A1: 동시 실행에서 단계가 사라지고 스냅샷이 뒤바뀜) --
+    @contextmanager
+    def locked(self):
+        path = os.path.join(self.folder, LOCK_FILE)
+        end = time.time() + LOCK_WAIT
+        while True:
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, f"{os.getpid()} {datetime.now().isoformat(timespec='seconds')}".encode())
+                os.close(fd)
+                break
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(path) > LOCK_STALE:
+                        os.remove(path)                     # 끝나지 않은 실행이 남긴 잠금
+                        sys.stderr.write(f"[WARN] 오래된 잠금을 버렸습니다 ({path})\n")
+                        continue
+                except OSError:
+                    pass
+                if time.time() > end:
+                    raise rt.InputError("다른 실행이 이 작업 폴더의 기록을 쓰고 있습니다. 그 실행이 끝난 뒤 같은 명령을 다시 실행하세요.") from None
+                time.sleep(0.1)
+            except OSError:
+                if time.time() > end:
+                    raise
+                time.sleep(0.1)
+        try:
+            self.reload()                                   # 기다리는 사이 다른 실행이 더한 단계까지 읽음
+            yield
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def reload(self) -> None:
+        with open(os.path.join(self.folder, STEPS_FILE), encoding="utf-8") as f:
+            self.steps = json.load(f)["steps"]
+
     # -- snapshots --
     def table_file(self, sid: int) -> str:
         return os.path.join(self.folder, "tables", f"s{sid}.pkl")
 
-    def write_table(self, sid: int, df: Any, meta: Dict[str, Any]) -> bool:
+    @staticmethod
+    def _tag(step: Dict[str, Any]) -> List[Any]:
+        """스냅샷이 어느 단계의 것인지 (기록과 다르면 버리고 기록으로 다시 만듦)."""
+        return [step["id"], step["name"], step["lineage"], step.get("at")]
+
+    def write_table(self, sid: int, df: Any, meta: Dict[str, Any], step: Optional[Dict[str, Any]] = None) -> bool:
         """Writes the snapshot and reads it back (R1). True when the read-back table has the same shape."""
         pd = pd_mod()
         path = self.table_file(sid)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        data = pickle.dumps({"pandas": pd.__version__, "df": df, "meta": meta}, protocol=pickle.HIGHEST_PROTOCOL)
+        tag = self._tag(step or self.step(sid))
+        data = pickle.dumps({"pandas": pd.__version__, "df": df, "meta": meta, "step": tag}, protocol=pickle.HIGHEST_PROTOCOL)
         rt.retry_fs(lambda: open(path, "wb").write(data))
         try:
             back = self._read_pickle(path)
-            return back is not None and back["df"].shape == df.shape
+            return back is not None and back["df"].shape == df.shape and back.get("step") == tag
         except Exception:
             return False
 
@@ -283,8 +341,10 @@ class Work:
 
     def load(self, sid: int, depth: int = 0) -> Tuple[Any, Dict[str, Any]]:
         """The table of a step: its snapshot, or rebuilt from the record (JIT recovery, reported in recovered)."""
+        if depth == 0 and getattr(self, "_check", False):
+            self._check_sources_of(sid)
         obj = self._read_pickle(self.table_file(sid)) if os.path.isfile(self.table_file(sid)) else None
-        if obj is not None:
+        if obj is not None and obj.get("step") == self._tag(self.step(sid)):
             return obj["df"], obj["meta"]
         if depth > 200:
             raise rt.InputError("작업 기록을 다시 실행하다가 너무 깊어졌습니다. new로 새 작업을 시작하세요.")
@@ -292,43 +352,94 @@ class Work:
         inputs = {k: self.load(v, depth + 1) for k, v in step.get("inputs", {}).items()}
         df, meta, _info = run_op(step["op"], step["args"], inputs, step["name"])
         self.write_table(sid, df, meta)
-        rt.note_recovered(f"표 {step['name']}의 스냅샷이 없거나 깨짐(또는 pandas 버전이 다름) -> 작업 기록으로 다시 만듦")
+        rt.note_recovered(f"표 {step['name']}의 스냅샷이 없거나 깨짐(또는 pandas 버전·기록과 다름) -> 작업 기록으로 다시 만듦")
         return df, meta
 
     def add(self, op: str, name: str, args: Dict[str, Any], inputs: Dict[str, int], df: Any, meta: Dict[str, Any],
             lineage: str, source: Optional[Dict[str, Any]] = None) -> Tuple[int, bool]:
-        sid = max((s["id"] for s in self.steps), default=0) + 1
-        old = self.names().get(name)
-        verified = self.write_table(sid, df, meta)
-        step = {"id": sid, "op": op, "name": name, "args": args, "inputs": inputs, "lineage": lineage,
-                "at": datetime.now().isoformat(timespec="seconds")}
-        if source:
-            step["source"] = source
-        self.steps.append(step)
-        self.save()
+        with self.locked():
+            sid = max((s["id"] for s in self.steps), default=0) + 1
+            old = self.names().get(name)
+            step = {"id": sid, "op": op, "name": name, "args": args, "inputs": inputs, "lineage": lineage, "rows": len(df),
+                    "at": datetime.now().isoformat(timespec="seconds")}
+            if source:
+                step["source"] = source
+            verified = self.write_table(sid, df, meta, step)
+            self.steps.append(step)
+            self.save()
+            try:                                            # 저장한 기록을 다시 읽어 이 단계가 있는지 (R1)
+                with open(os.path.join(self.folder, STEPS_FILE), encoding="utf-8") as f:
+                    verified = verified and step in json.load(f)["steps"]
+            except (OSError, ValueError, KeyError):
+                verified = False
         if old is not None:
+            before, now = self.source_files(old), self.source_files(sid)
+            if before != now:                               # 이름 가림 (Fable 검토 2026-11-14 A3, 사용자 결정: 경고)
+                self.warnings.append(f"표 {name}은(는) {', '.join(sorted(before)) or '다른 표'}에서 만든 표였는데, 이제 "
+                                     f"{', '.join(sorted(now)) or '다른 표'}의 표입니다 (옛 {name}은 undo로 되돌릴 수 있음).")
             stale = sorted({s["name"] for s in self.steps if old in s.get("inputs", {}).values() and self.names().get(s["name"]) == s["id"]})
             if stale:
                 self.warnings.append(f"{name}을(를) 새로 만들었습니다. {', '.join(stale)}은(는) 옛 {name} 기준입니다 (다시 계산하지 않음).")
         return sid, verified
 
     def check_sources(self) -> None:
-        """A source file changed since it was read: warnings with the full command that reads it again."""
-        latest = set(self.names().values())
-        for s in self.steps:
-            src = s.get("source")
-            if not src or s["id"] not in latest:
+        """원본 확인을 켬: 이 실행에서 처음 읽는 표마다 그 표의 조상 원본만 확인한다 (Fable 검토 2026-11-14 A4:
+        작업 안의 모든 원본을 매번 확인해 관계없는 표에도 경고가 붙었음)."""
+        self._check = True
+        self._checked: set = set()
+
+    def ancestors(self, sid: int) -> List[int]:
+        out, todo = [], [sid]
+        while todo:
+            x = todo.pop()
+            if x in out:
                 continue
+            out.append(x)
+            todo.extend(self.step(x).get("inputs", {}).values())
+        return out
+
+    def source_files(self, sid: Optional[int]) -> set:
+        """표가 나온 원본 파일 이름들 (조상 단계를 따라감)."""
+        if sid is None or sid not in {s["id"] for s in self.steps}:
+            return set()
+        return {os.path.basename(self.step(x)["source"]["file"]) for x in self.ancestors(sid) if self.step(x).get("source")}
+
+    def _check_sources_of(self, sid: int) -> None:
+        """원본이 읽은 뒤 바뀌었으면: 다시 읽어 값이 같으면(서식만 바뀜, 예: 바뀐 칸 칠하기) 기록만 조용히 갱신,
+        다르면 다시 읽는 전체 명령과 함께 경고."""
+        for x in self.ancestors(sid):
+            s = self.step(x)
+            src = s.get("source")
+            if not src or x in self._checked:
+                continue
+            self._checked.add(x)
             try:
                 st = os.stat(src["file"])
                 changed = (int(st.st_mtime), st.st_size) != (src["mtime"], src["size"])
             except OSError:
                 self.warnings.append(f"원본 {os.path.basename(src['file'])}이(가) 없습니다 (표 {s['name']}).")
                 continue
-            if changed:
-                again = rt.full_command(["select", "--file", src["file"]] + _select_extra(s["args"]) + ["--name", s["name"]])
-                self.warnings.append(f"원본 {os.path.basename(src['file'])}이(가) 읽은 뒤 바뀌었습니다. 행 위치가 달라졌을 수 있습니다. "
-                                     f"다시 읽으려면: {again}")
+            if not changed:
+                continue
+            try:
+                fresh, _meta, _info = run_op(s["op"], s["args"], {}, s["name"])
+                self._check = False                          # 아래 load가 다시 확인하지 않게
+                same = fresh.equals(self.load(x)[0])
+            except Exception:
+                same = False
+            finally:
+                self._check = True
+            if same:
+                with self.locked():
+                    for t in self.steps:
+                        if t["id"] == x and t.get("source"):
+                            t["source"].update(mtime=int(st.st_mtime), size=st.st_size)
+                    self.save()
+                sys.stderr.write(f"[INFO] 원본 {os.path.basename(src['file'])}이(가) 저장됐지만 값은 같아 그대로 씁니다 (표 {s['name']})\n")
+                continue
+            again = rt.full_command(["select", "--file", src["file"]] + _select_extra(s["args"]) + ["--name", s["name"]])
+            self.warnings.append(f"원본 {os.path.basename(src['file'])}이(가) 읽은 뒤 바뀌었습니다 (값이 다름). 행 위치가 달라졌을 수 있습니다. "
+                                 f"다시 읽으려면: {again}")
 
 
 def _select_extra(a: Dict[str, Any]) -> List[str]:
@@ -716,7 +827,8 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     filled_n = [sum(not _empty(v) for v in vals) for _, vals in rows]
     head_i, above = _pick_block(rows, filled_n, grid["explicit_end"])
     if above:
-        warnings.append(f"표 위의 다른 내용 {len(above)}행(엑셀 행 {above[0]}~{above[-1]})은 표가 아니라고 보고 읽지 않았습니다 "
+        span = str(above[0]) if len(above) == 1 else f"{above[0]}~{above[-1]}"
+        warnings.append(f"표 위의 다른 내용 {len(above)}행(엑셀 행 {span})은 표가 아니라고 보고 읽지 않았습니다 "
                         "(빈 행으로 나뉜 내용 중 가장 큰 것을 표로 봄). 그것을 읽으려면 --range로 범위를 주세요.")
     if head_i is None:
         raise rt.InputError(f"{os.path.basename(path)} {grid['sheet']}"
@@ -820,7 +932,8 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     meta = {"units": units,
             "letters": {n: {"file": os.path.basename(path), "sheet": grid["sheet"], "letter": l} for n, l in zip(names, letters)},
             "rows": {ROW: {"file": os.path.basename(path), "path": path, "sheet": grid["sheet"]}},
-            "kinds": kinds, "anchor": {"file": path, "sheet": grid["sheet"], "header_row": header_row, "range": area}}
+            "kinds": kinds, "anchor": {"file": path, "sheet": grid["sheet"], "header_row": header_row, "range": area},
+            "hidden": sorted(data_rows & grid["hidden"])}
     return df, meta, warnings
 
 
@@ -1369,16 +1482,20 @@ def check_name(name: Optional[str], work: Work) -> str:
 
 def _select_needs_input(a: Any) -> rt.InputError:
     """--file도 --from도 없는 select: 무엇을 읽을지 도구가 짐작하지 않고 멈춤 (사용자 결정 2026-11-14).
-    지금 표에서 고르는 명령과 Excel에 열린(저장된) 통합문서를 읽는 명령을 전체 명령으로 줌."""
+    만든 표에서 고르는 명령과 Excel에 열린(저장된) 통합문서를 읽는 명령을 전체 명령으로 줌."""
     cands, argvs = [], []
     work = os.path.abspath(a.work) if getattr(a, "work", None) else current_work()
     if work and (getattr(a, "where", None) or getattr(a, "columns", None)):
-        # 고를 조건·열이 있을 때만 '지금 표에서 고르기'를 권함: 아무것도 없는 select --from <지금 표>는 표를 그대로 복사할 뿐이라
-        # 경량 모델이 그것을 실행하고 "열린 엑셀을 읽었다"고 답할 수 있음 (집 PC 2026-11-13 4-2, 0.2.9)
+        # 고를 조건·열이 있을 때만 '만든 표에서 고르기'를 권함: 아무것도 없는 select --from <표>는 표를 그대로 복사할 뿐이라
+        # 경량 모델이 그것을 실행하고 "열린 엑셀을 읽었다"고 답할 수 있음 (집 PC 2026-11-13 4-2, 0.2.9).
+        # 표가 여럿이면 어느 표인지 짐작하지 않고 모두 후보로 (집 PC 2026-11-14 P7: 마지막 표가 0행이었음, 0.2.10)
         try:
-            cur = Work(work).resolve(None, "--from")[0]
-            cands.append(f"지금 표 {cur}에서 고르기")
-            argvs.append(argv_setting("--from", cur))
+            w = Work(work)
+            tables = sorted(w.names().items(), key=lambda kv: kv[1])[-TABLE_CHOICES:]
+            for t, sid in tables:
+                rows = w.step(sid).get("rows")
+                cands.append(f"표 {t}" + (f"({rows}행)" if rows is not None else "") + "에서 고르기")
+                argvs.append(argv_setting("--from", t))
         except Exception:
             pass
     books = rt.open_workbooks()
@@ -1413,8 +1530,10 @@ def cmd_select(a: Any) -> Dict[str, Any]:
         lineage = f"{name} = {where_text(meta, df)}" + (f"에서 {a.columns} 열" if a.columns else "") + (f", 조건 {a.where}" if a.where else "")
         sid, ok_ = work.add("select", name, args, {}, df, meta, lineage,
                             source={"file": path, "mtime": int(st.st_mtime), "size": st.st_size})
+        kept = set(df[ROW].tolist()) if ROW in df.columns else set()
+        hidden = [r for r in meta.get("hidden", []) if r in kept]       # 숨긴 행의 엑셀 행 (bom-kit이 결과에 든 숨긴 행을 알림)
         return table_answer("select", work, name, df, meta, lineage, ok_, info["warnings"],
-                            anchor=meta.get("anchor"), source=path)
+                            anchor=meta.get("anchor"), source=path, **({"hidden_rows": hidden} if hidden else {}))
     if a.sheet or a.range:
         raise rt.InputError("--sheet와 --range는 --file과 함께만 씁니다 (만든 표에서 고를 때는 --columns, --where).")
     work = open_work(a)
@@ -1620,20 +1739,22 @@ def cmd_undo(a: Any) -> Dict[str, Any]:
     work = open_work(a)
     if not work.steps:
         raise rt.InputError("되돌릴 단계가 없습니다 (이 작업 폴더에 만든 표가 없음).")
-    step = work.steps.pop()
-    work.save()
-    try:
-        os.remove(work.table_file(step["id"]))
-    except OSError:
-        pass
+    with work.locked():
+        if not work.steps:
+            raise rt.InputError("되돌릴 단계가 없습니다 (이 작업 폴더에 만든 표가 없음).")
+        step = work.steps.pop()
+        work.save()
+        try:
+            os.remove(work.table_file(step["id"]))
+        except OSError:
+            pass
     still = work.names()
     back = still.get(step["name"])
-    cur = work.current_name()
     preview = (f"되돌림: {step['lineage']}. " + (f"{step['name']}은(는) 그 전 표를 다시 가리킵니다. " if back else f"{step['name']}은(는) 없어졌습니다. ")
-               + (f"지금 표: {cur}" if cur else "남은 표 없음"))
+               + (f"남은 표: {', '.join(still)}" if still else "남은 표 없음"))   # 다음 명령은 --from으로 표를 적음
     verified = step["id"] not in [s["id"] for s in Work(work.folder).steps]
     return rt.ok("undo", preview, verified, "preview를 사용자에게 알리세요. 같은 명령을 다시 실행하지 마세요 (한 번에 한 단계씩 되돌림).",
-                 None if verified else ["작업 기록을 다시 읽어 확인하지 못함"], removed=step["name"], current=cur,
+                 None if verified else ["작업 기록을 다시 읽어 확인하지 못함"], removed=step["name"],
                  tables=sorted(still), work=work.folder)
 
 
@@ -1919,7 +2040,7 @@ def build_cli() -> rt.JsonArgumentParser:
     p.add_argument("--name", help="새 표 이름 (생략하면 df1, df2 ...)")
 
     p = cmd("show", "표의 앞 20행을 엑셀 행 번호와 함께 보기 (넘으면 전체를 csv로)")
-    p.add_argument("--from", dest="source", help="볼 표 (생략하면 지금 표)")
+    p.add_argument("--from", dest="source", help="볼 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
     p.add_argument("--columns", help="볼 열 (이름이나 열 글자, ','로 나눔)")
     p.add_argument("--start", type=int, help="몇 번째 행부터 볼지 (표 안의 순서, 1부터, 생략하면 1). 이어 보기는 next_commands")
 
@@ -1944,13 +2065,13 @@ def build_cli() -> rt.JsonArgumentParser:
     p.add_argument("--name", help="새 표 이름")
 
     p = cmd("group", "열 값별로 묶어 행 수와 숫자 열 합계")
-    p.add_argument("--from", dest="source", help="묶을 표 (생략하면 지금 표)")
+    p.add_argument("--from", dest="source", help="묶을 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
     p.add_argument("--by", required=True, help="묶을 열 (','로 나눔)")
     p.add_argument("--sum", help="합계를 낼 숫자 열 (','로 나눔, 생략하면 행 수만)")
     p.add_argument("--name", help="새 표 이름")
 
     p = cmd("sort", "행 정렬 (작은 것부터, --desc는 큰 것부터)")
-    p.add_argument("--from", dest="source", help="정렬할 표 (생략하면 지금 표)")
+    p.add_argument("--from", dest="source", help="정렬할 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
     p.add_argument("--by", required=True, help="정렬 기준 열 (','로 나눔, 앞 열이 먼저)")
     p.add_argument("--desc", action="store_true", help="큰 것부터")
     p.add_argument("--name", help="새 표 이름")
@@ -1959,7 +2080,7 @@ def build_cli() -> rt.JsonArgumentParser:
     rt.add_command(sub, root, "new", "새 작업 시작 (다음 select --file이 새 작업 폴더를 만듦)")
 
     p = cmd("chart", "표를 차트 그림(.png)으로 저장 (막대·선·산점·원·히스토그램·상자)")
-    p.add_argument("--from", dest="source", help="그릴 표 (생략하면 지금 표)")
+    p.add_argument("--from", dest="source", help="그릴 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
     p.add_argument("--kind", choices=CHART_KINDS, default="bar",
                    help="bar 막대(기본), line 선, scatter 산점, pie 원, hist 히스토그램, box 상자")
     p.add_argument("--x", help="가로축(막대·선) 또는 조각 이름(원) 열, 산점은 숫자 열. 생략하면 엑셀 행 순서 (원·산점은 필요)")
@@ -1969,7 +2090,7 @@ def build_cli() -> rt.JsonArgumentParser:
     p.add_argument("--overwrite", action="store_true", help="같은 이름 그림이 있으면 덮어쓰기 (사용자가 원할 때만)")
 
     p = cmd("export", "표를 새 파일(.xlsx, .csv)로 저장")
-    p.add_argument("--from", dest="source", help="저장할 표 (생략하면 지금 표)")
+    p.add_argument("--from", dest="source", help="저장할 표 이름 (꼭 씀, 빼면 [후보]로 물음)")
     p.add_argument("--save", nargs="?", const=None, help="저장할 파일 (생략하면 작업 폴더의 <표 이름>.xlsx, 이름만 주면 작업 폴더에)")
     p.add_argument("--overwrite", action="store_true", help="같은 이름 파일이 있으면 덮어쓰기 (사용자가 원할 때만)")
     return root
