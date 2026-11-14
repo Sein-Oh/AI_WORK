@@ -6,6 +6,7 @@
 ## 지금 유효한 원칙
 | 날짜 | 결정 | 반영된 곳 |
 |---|---|---|
+| 2026-11-15 | pandas-kit은 pandas에서 자주 쓰는 메서드를 명령 하나씩 늘려 "CLI지만 인터프리터처럼" 쓴다 ("가" 안: 자유 코드 `eval`이 아니라 메서드마다 명령, 새 명령 이름은 pandas 이름 그대로). LLM에게 pandas 코드를 짜게 하지 않는 원칙은 그대로 | pandas-kit CHANGELOG 남은 할 일 |
 | 2026-11-14 | pandas-kit·bom-kit은 일부러 스테이트풀 (작업 폴더·표 이름·기록). 대신 짐작은 막음: `--from`은 늘 적음(빼면 `[후보]`), 이름 가림·원본 바뀜은 경고. bom-kit 결과는 원본 옆 `<원본 이름>_bom\`에 실행마다 시각을 붙인 새 파일(덮어쓰지 않음), pandas-kit 작업 폴더는 캐시라 지움. BOM 변경 이력은 diff 기록을 모으는 `bom.py history` + 기본 스킬 `bom-history` (16개) | `AGENTS.md` 폴더 구조·도구별 규칙, `AIKIT/AGENTS.md` 3장, pandas-kit 0.2.10·bom-kit 0.2.0 CHANGELOG |
 | 2026-11-14 | bom-kit: BOM 업무 규칙(Level로 상위·경로, 두 판 비교 묶기, 쓰인 곳·제품 1대당 수량)을 한 도구(`AIKIT/bom-kit/bom.py`)에 모음. 스킬은 둘(`mbom-diff`, `where-used`)로 두고 스킬 폴더 스크립트는 없앰. pandas-kit과 따로 배포되는 완결형 도구 (pandas-kit을 import하지 않고 실행만). 스킬마다 bom.py 명령 하나 (Gemma급 검토: 13단계를 잇다 중간 지시를 따라가 멈출 위험) | `AGENTS.md` 저장소 성격·폴더 구조·도구별 규칙, `AIKIT/AGENTS.md` 2장·9장, setup.py |
 | 2026-11-14 | MBOM 두 판 비교(mbom-diff)는 기본 스킬 (pandas-kit을 조합한 업무 스킬, 스크립트는 스킬 폴더 `scripts\`). 짝은 경로(품번 기준)로 맞추고, 다른 상위로 옮겨진 품목은 이동이 아니라 삭제·추가로, 같은 자리에서 품번이 바뀐 것만 대체 후보 (품명은 보지 않음). pandas-kit `select`는 `--file`·`--from` 중 하나가 꼭 필요 (없으면 읽을 것을 묻고 멈춤). `--work`는 어느 명령에서나 그 작업 폴더로 옮겨 가고 옮겼으면 알림. `join --keep-left`(왼쪽 행을 모두 남김) | `AGENTS.md` 폴더 구조, `AIKIT/AGENTS.md` 3장, mbom-diff SKILL.md, pandas-kit CHANGELOG 0.2.3 |
