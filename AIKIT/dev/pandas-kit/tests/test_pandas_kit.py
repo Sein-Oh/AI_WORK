@@ -667,3 +667,67 @@ def test_work_option_says_when_the_current_work_folder_changes(env, mbom):
     assert code == 0
     code, out = run(env, "show", "--from", "zz", "--work", first)
     assert code == 1 and out["message"].startswith("지금 작업 폴더를")                                       # 실패해도 옮긴 것은 알림
+
+
+# ---------------------------------------------------------------------------
+# BOM이 아닌 표(공정 기록)로 써 보며 찾은 것 (집 PC 2026-11-14)
+# ---------------------------------------------------------------------------
+
+def _sheet(path, rows, title=None):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    if title:
+        ws.append([title])
+        ws.append([])
+    for r in rows:
+        ws.append(list(r))
+    wb.save(path)
+    return str(path)
+
+
+def test_unit_row_under_the_header_is_read_as_column_units(env):
+    # 머리글 아래 단위 행(°C, bar ...)이 데이터로 읽혀 숫자 열 아홉 개가 모두 글자가 됐고, 조건으로 그 행을 빼도 글자 그대로였음
+    rows = [("반응온도", "유량", "비고"), ("°C", "L/min", None),
+            (192.58, 13.41, "a"), (171.69, 5.02, "b"), (186.82, 14.12, "c")]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "공정.xlsx", rows, "반응 공정 시험 기록"), "--name", "p")
+    cols = {c["name"]: c for c in out["columns"]}
+    assert out["count"] == 3 and cols["반응온도"]["kind"] == "숫자" and cols["반응온도"]["unit"] == "°C"
+    assert cols["유량"]["unit"] == "L/min" and "unit" not in cols["비고"]
+    assert any("머리글 아래 4행(°C, L/min)은 데이터가 아니라 열 단위로" in w for w in out["warnings"])
+    assert ok(env, "show")["rows"][0]["엑셀 행"] == 5                                  # 단위 행(4) 다음부터 데이터
+    assert ok(env, "select", "--from", "p", "--where", "유량<10")["count"] == 1        # 숫자 열이라 숫자 비교
+    kept = ok(env, "select", "--from", "p", "--columns", "반응온도")
+    assert kept["columns"][0]["unit"] == "°C"                                          # 단계를 거쳐도 단위는 남음
+
+
+def test_a_text_row_that_is_not_units_is_kept_as_data(env):
+    # 글자 열이 섞인 보통 표의 첫 행을 단위 행으로 보면 데이터가 사라진다 (숫자 열이 글자가 되는 경우만 단위 행)
+    rows = [("업체", "담당", "수량"), ("한빛볼트", "김", 3), ("대성", "이", 5), ("미래", "박", 7)]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "list.xlsx", rows), "--name", "a")
+    assert out["count"] == 3 and not any("단위" in w for w in out.get("warnings", []))
+    assert ok(env, "show")["rows"][0]["업체"] == "한빛볼트"
+    mixed = [("코드", "수량"), ("A-1", 3), ("A-2", 5), ("A-3", 7)]                      # 글자 열 하나뿐: 단위 행 아님
+    out2 = ok(env, "select", "--file", _sheet(env["dir"] / "m.xlsx", mixed), "--name", "b")
+    assert out2["count"] == 3 and not any("단위" in w for w in out2.get("warnings", []))
+
+
+def test_sort_orders_a_text_number_column_as_numbers(env):
+    # 집 PC 2026-11-14: 글자 열을 글자 순서로 정렬해 유량 5.02를 10.02보다 크다고 했고 알리지도 않았음
+    rows = [("유량", "비고"), (10.02, "a"), (5.02, "b"), (9.5, "c"), ("측정 안 함", "d"), (14.1, "e")]
+    ok(env, "select", "--file", _sheet(env["dir"] / "f.xlsx", rows), "--name", "f")
+    assert {c["name"]: c["kind"] for c in ok(env, "show")["columns"]}["유량"] == "글자"
+    up = ok(env, "sort", "--by", "유량", "--name", "up")
+    assert any("숫자로 읽히는 칸끼리 숫자로 정렬" in w and "1개는 맨 뒤" in w for w in up["warnings"])
+    vals = [r["유량"] for r in ok(env, "show", "--from", "up")["rows"]]
+    assert vals == ["5.02", "9.5", "10.02", "14.1", "측정 안 함"]
+    down = ok(env, "sort", "--from", "f", "--by", "유량", "--desc", "--name", "down")
+    assert [r["유량"] for r in ok(env, "show", "--from", "down")["rows"]][:2] == ["14.1", "10.02"]
+    assert not ok(env, "sort", "--from", "f", "--by", "비고", "--name", "t").get("warnings")   # 글자 열은 그대로
+
+
+def test_same_read_warning_for_many_columns_is_one_line(env):
+    # 열마다 한 줄이면 같은 말이 아홉 줄 (공정 샘플)
+    rows = [("a", "b", "c", "d"), (1, 2, 3, "x"), ("없음", "없음", "없음", "y"), (5, 6, 7, "z"), (8, 9, 10, "w")]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "w.xlsx", rows), "--name", "w")
+    notes = [w for w in out["warnings"] if "숫자 사이에 숫자가 아닌 칸" in w]
+    assert len(notes) == 1 and "a(A), b(B), c(C) 열은 숫자 사이에 숫자가 아닌 칸(엑셀 행 3)" in notes[0]

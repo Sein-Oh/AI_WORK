@@ -477,23 +477,63 @@ def _is_number_text(v: Any) -> bool:
     return isinstance(v, str) and bool(_NUM_TEXT.match(v)) and not _LEADING_ZERO.match(v)
 
 
-def column_read_warning(name: str, letter: str, cells: List[Tuple[int, Any]], kind: str) -> Optional[str]:
-    """A warning for a column whose cells are not all of one kind (집 PC 2026-11-13, MBOM: one number written as text made a
-    whole column text and 'Scrap %>3' compared as text). cells: (Excel row, value) of the filled cells."""
-    def rows_text(rs: List[int]) -> str:
-        return ", ".join(str(r) for r in rs[:5]) + (" 등" if len(rs) > 5 else "")
+def _rows_text(rs: List[int], limit: int = 5) -> str:
+    return ", ".join(str(r) for r in rs[:limit]) + (" 등" if len(rs) > limit else "")
+
+
+def column_read_warning(name: str, letter: str, cells: List[Tuple[int, Any]], kind: str) -> Optional[Tuple[str, str, List[int]]]:
+    """A column whose cells are not all of one kind -> (분류, '<이름>(<글자>)', 그 칸들의 엑셀 행). 여러 열이면 read_table이 한 줄로 묶는다
+    (집 PC 2026-11-13, MBOM: 글자로 저장된 숫자 한 칸이 열 전체를 글자로 만들고 'Scrap %>3'이 글자 비교였음)."""
     if kind == "숫자":
         txt = [r for r, v in cells if isinstance(v, str)]
-        if txt and len(txt) < len(cells):
-            return (f"{name}({letter}) 열의 글자로 저장된 숫자 {len(txt)}칸(엑셀 행 {rows_text(txt)})을 숫자로 읽었습니다.")
-        return None
+        return ("글자로 저장된 숫자", f"{name}({letter})", txt) if txt and len(txt) < len(cells) else None
     if kind != "글자":
         return None
     other = [r for r, v in cells if not (_is_number(v) or _is_number_text(v))]
     if other and len(other) <= max(1, len(cells) // 10) and len(other) < len(cells):
-        return (f"{name}({letter}) 열은 숫자 사이에 숫자가 아닌 칸 {len(other)}개(엑셀 행 {rows_text(other)})가 있어 글자 열로 읽었습니다. "
-                f"숫자 조건(>, <, >=, <=)은 숫자로 읽히는 칸끼리 비교합니다.")
+        return ("숫자 사이 글자", f"{name}({letter})", other)
     return None
+
+
+def column_read_warnings(notes: List[Tuple[str, str, List[int]]]) -> List[str]:
+    """열마다 한 줄이면 같은 말이 여러 줄 되므로(공정 샘플 9열) 분류별로 한 줄로 묶는다."""
+    out: List[str] = []
+    for cat in ("글자로 저장된 숫자", "숫자 사이 글자"):
+        group = [(label, rows) for c, label, rows in notes if c == cat]
+        if not group:
+            continue
+        cols = ", ".join(label for label, _ in group[:8]) + (" 등" if len(group) > 8 else "")
+        rows = sorted({r for _, rs in group for r in rs})
+        one = len(group) == 1                                               # 한 열이면 몇 칸인지까지
+        where = f"(엑셀 행 {_rows_text(rows)})"
+        if cat == "글자로 저장된 숫자":
+            n = f"{len(group[0][1])}칸" if one else "칸"
+            out.append(f"{cols} 열의 글자로 저장된 숫자 {n}{where}을 숫자로 읽었습니다.")
+        else:
+            n, ga = (f"칸 {len(group[0][1])}개", "가") if one else ("칸", "이")
+            out.append(f"{cols} 열은 숫자 사이에 숫자가 아닌 {n}{where}{ga} 있어 글자 열로 읽었습니다. "
+                       "숫자 조건(>, <, >=, <=)과 sort는 숫자로 읽히는 칸끼리 비교합니다.")
+    return out
+
+
+def unit_row(data: List[Tuple[int, List[Any]]]) -> Optional[int]:
+    """머리글 바로 아래 단위 행(`°C`, `bar`, `wt%` ...)의 자리. 그 행 때문에 숫자 열이 글자가 될 때만 (집 PC 2026-11-14 공정 샘플).
+    조건: 데이터가 3행 이상, 첫 행의 찬 칸이 모두 짧은 글자(숫자 모양 아님)이고 둘 이상, 그 행을 빼면 두 열 이상이 숫자 열이 된다."""
+    if len(data) < 3:
+        return None
+    first = data[0][1]
+    filled = [j for j, v in enumerate(first) if not _empty(v)]
+    if len(filled) < 2 or any(not isinstance(first[j], str) or len(first[j].strip()) > 12
+                              or _is_number_text(first[j]) for j in filled):
+        return None
+    rest = data[1:]
+    became = 0
+    for j in filled:
+        with_row = convert_column([vals[j] for _, vals in data])[2]
+        without = convert_column([vals[j] for _, vals in rest])[2]
+        if with_row == "글자" and without == "숫자":
+            became += 1
+    return data[0][0] if became >= 2 and became >= len(filled) // 2 else None
 
 
 def convert_column(values: List[Any]) -> Tuple[List[Any], str, str]:
@@ -594,6 +634,8 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
             after_gap = len(rest)
             break
         data.append((r, part))
+    units: Dict[str, str] = {}
+    unit_at = unit_row(data)
     c0 = grid["c1"] + j1
     letters = [col_letter(c0 + j) for j in range(j2 - j1 + 1)]
     names: List[str] = []
@@ -607,17 +649,25 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
         while name in names:
             name, n = f"{base}_{n}", n + 1
         names.append(name)
+    if unit_at is not None:
+        units = {names[j]: str(v).strip() for j, v in enumerate(data[0][1]) if not _empty(v)}
+        data = data[1:]
+        warnings.append(f"머리글 아래 {unit_at}행({', '.join(list(units.values())[:6])}"
+                        + (" 등" if len(units) > 6 else "") + ")은 데이터가 아니라 열 단위로 보고 뺐습니다 "
+                        "(그 행을 데이터로 읽으면 숫자 열이 글자 열이 됨). 단위는 결과의 columns에 있습니다.")
     cols: Dict[str, Any] = {ROW: pd.array([r for r, _ in data], dtype="Int64")}
     kinds: Dict[str, str] = {}
+    notes: List[Tuple[str, str, List[int]]] = []
     for j, name in enumerate(names):
         vals, dtype, kind = convert_column([vals[j] for _, vals in data])
         kinds[name] = kind
         note = column_read_warning(name, letters[j], [(r, v[j]) for r, v in data if not _empty(v[j])], kind)
         if note:
-            warnings.append(note)
+            notes.append(note)
         cols[name] = pd.Series(vals, dtype=dtype if dtype != "datetime64[ns]" else None)
         if dtype == "datetime64[ns]":
             cols[name] = pd.to_datetime(cols[name])
+    warnings.extend(column_read_warnings(notes))
     df = pd.DataFrame(cols)
     last = data[-1][0] if data else header_row
     area = f"{letters[0]}{header_row}:{letters[-1]}{last}"
@@ -641,7 +691,8 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     fe = sum(1 for (r, c) in grid["formulas"] if r in by_row and c_lo <= c <= c_hi and _empty(by_row[r][c - c0]))
     if fe:
         warnings.append(f"값이 저장되지 않은 수식 칸 {fe}개는 빈 값으로 읽었습니다 (Excel에서 열어 저장하면 값이 생김).")
-    meta = {"letters": {n: {"file": os.path.basename(path), "sheet": grid["sheet"], "letter": l} for n, l in zip(names, letters)},
+    meta = {"units": units,
+            "letters": {n: {"file": os.path.basename(path), "sheet": grid["sheet"], "letter": l} for n, l in zip(names, letters)},
             "rows": {ROW: {"file": os.path.basename(path), "path": path, "sheet": grid["sheet"]}},
             "kinds": kinds, "anchor": {"file": path, "sheet": grid["sheet"], "header_row": header_row, "range": area}}
     return df, meta, warnings
@@ -803,6 +854,7 @@ def _keep_meta(meta: Dict[str, Any], cols: List[str]) -> Dict[str, Any]:
     out = dict(meta)
     out["letters"] = {c: v for c, v in meta.get("letters", {}).items() if c in cols}
     out["kinds"] = {c: v for c, v in meta.get("kinds", {}).items() if c in cols}
+    out["units"] = {c: v for c, v in meta.get("units", {}).items() if c in cols}
     return out
 
 
@@ -1089,10 +1141,29 @@ def op_group(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]]
 
 
 def op_sort(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]], name: str):
-    """Rows ordered by --by (first column first), --desc for large to small. Empty cells last, ties keep the table order."""
+    """Rows ordered by --by (first column first), --desc for large to small. Empty cells last, ties keep the table order.
+    A text column whose cells are mostly numbers is ordered as numbers, like --where (집 PC 2026-11-14: 유량 5.02가 10.02보다
+    크다고 나왔고 알리지도 않았음). Cells that are not numbers go last, with the rest of the empty cells."""
+    pd = pd_mod()
     df, meta = inputs["from"]
-    out = df.sort_values(args["by"], ascending=not args.get("desc"), na_position="last", kind="stable").reset_index(drop=True)
-    return out, dict(meta), {"warnings": []}
+    warnings: List[str] = []
+    keys: Dict[str, Any] = {}
+    for i, c in enumerate(args["by"]):
+        col = df[c]
+        if pd.api.types.is_numeric_dtype(col) or pd.api.types.is_datetime64_any_dtype(col) or pd.api.types.is_bool_dtype(col):
+            continue
+        num = pd.to_numeric(col.astype("string").str.strip(), errors="coerce")
+        filled = int(col.notna().sum())
+        bad = int((col.notna() & num.isna()).sum())
+        if filled and bad <= max(1, filled // 10) and bad < filled:
+            keys[f"__s{i}"] = num
+            warnings.append(f"'{c}' 열은 글자 열이라 숫자로 읽히는 칸끼리 숫자로 정렬했습니다"
+                            + (f" (숫자가 아닌 칸 {bad}개는 맨 뒤)." if bad else "."))
+    by = [f"__s{i}" if f"__s{i}" in keys else c for i, c in enumerate(args["by"])]
+    work = df.assign(**keys) if keys else df
+    out = work.sort_values(by, ascending=not args.get("desc"), na_position="last", kind="stable")
+    out = out.drop(columns=list(keys)).reset_index(drop=True)
+    return out, dict(meta), {"warnings": warnings}
 
 
 OP_FUNCS = {"select": op_select, "join": op_join, "only": op_only, "stack": op_stack, "diff": op_diff,
@@ -1111,7 +1182,10 @@ def columns_info(df: Any, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     out = []
     for c in data_cols(df)[:LIST_MAX]:
         lt = meta.get("letters", {}).get(c)
-        out.append({"name": c, "letter": lt["letter"] if lt else None, "kind": meta.get("kinds", {}).get(c) or kind_of(df[c])})
+        item = {"name": c, "letter": lt["letter"] if lt else None, "kind": meta.get("kinds", {}).get(c) or kind_of(df[c])}
+        if meta.get("units", {}).get(c):
+            item["unit"] = meta["units"][c]
+        out.append(item)
     return out
 
 

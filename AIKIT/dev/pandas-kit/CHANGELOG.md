@@ -2,6 +2,17 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
 
+## [0.2.4] - 2026-11-14
+
+### 수정 (BOM이 아닌 표로 써 보며, 개선점_MBOM.md H)
+- 머리글 아래 단위 행(`°C`, `bar`, `wt%` ...)이 데이터로 읽혀 숫자 열이 모두 글자 열이 됐고, 조건으로 그 행을 빼도 글자 열 그대로여서
+  `group --sum`·`chart --y`를 아예 쓸 수 없었음 (ml-kit 공정 샘플: 9열 전부) -> 단위 행으로 보고 빼며 `warnings`, 단위는 `columns`의 `unit`.
+  숫자 열이 둘 이상 살아날 때만 단위 행으로 본다 (보통 글자 열은 데이터 그대로). 시험 `test_unit_row_under_the_header_is_read_as_column_units`,
+  `test_a_text_row_that_is_not_units_is_kept_as_data`.
+- `sort`: 글자 열을 글자 순서로 정렬해 유량 5.02가 10.02보다 크다고 했고 알리지도 않았음 (`--where`는 숫자로 비교하는데 `sort`만 달랐음)
+  -> 칸이 대부분 숫자인 글자 열은 숫자로 정렬하고 `warnings`, 숫자가 아닌 칸은 맨 뒤. 시험 `test_sort_orders_a_text_number_column_as_numbers`.
+- 열마다 나오던 같은 읽기 경고(공정 샘플 9줄)를 분류별 한 줄로 묶음. 시험 `test_same_read_warning_for_many_columns_is_one_line`.
+
 ## [0.2.3] - 2026-11-14
 
 ### 사용자 결정 반영 (개선점_MBOM.md F)
