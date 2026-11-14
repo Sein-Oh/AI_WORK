@@ -39,6 +39,7 @@ MARKER = ".created_by_pandas-kit"
 STEPS_FILE = "steps.json"
 ROW = "_row"                       # Excel row number of the source file (hidden column, kept through every step)
 ROW_SHOWN = "엑셀 행"
+EMPTY_SHOWN = "(빈 칸)"             # group의 빈 값 묶음 이름 (사용자 결정 2026-11-14, null 대신)
 OPS = (">=", "<=", "!=", "!~", "=", ">", "<", "~")
 _COND = re.compile(r"^\s*(.+?)\s*(>=|<=|!=|!~|=|>|<|~)\s*(.*?)\s*$", re.S)
 _RANGE = re.compile(r"^([A-Z]{1,3})?(\d+)?(?::([A-Z]{1,3})?(\d+)?)?$")
@@ -334,10 +335,19 @@ def _select_extra(a: Dict[str, Any]) -> List[str]:
     return out
 
 
+SWITCHED: List[str] = []         # --work로 지금 작업 폴더가 바뀐 일 (preview 앞에 알림, 사용자 결정 2026-11-14)
+
+
 def open_work(args: Any, create_for: Optional[str] = None) -> Work:
-    """--work <folder> (switch), else the current work folder, else a new one next to create_for (select --file)."""
+    """--work <folder> (switch), else the current work folder, else a new one next to create_for (select --file).
+    --work는 어느 명령에서나 '그 작업 폴더로 옮겨 가기'이고, 옮겼으면 결과 preview 앞에 알린다 (보기 명령도 같음)."""
     if getattr(args, "work", None):
         work = Work(os.path.abspath(args.work))
+        before = current_work()
+        if not before or os.path.normcase(os.path.abspath(before)) != os.path.normcase(work.folder):
+            SWITCHED.append(f"지금 작업 폴더를 {os.path.basename(work.folder)}(으)로 바꿨습니다"
+                            + (f" (전: {os.path.basename(before)})" if before else "")
+                            + ". 다음 명령도 이 작업 폴더의 표를 씁니다.")
         set_current_work(work.folder)
         return work
     cur = current_work()
@@ -370,32 +380,18 @@ def parse_range(text: Optional[str]) -> Optional[Tuple[Optional[int], Optional[i
             None if one_cell else (col_index(c2) if c2 else None), None if one_cell else (int(r2) if r2 else None))
 
 
-def resolve_file(path: Optional[str]) -> str:
-    """--file, or the workbook open in Excel (only its path is read)."""
-    if path:
-        full = os.path.abspath(str(path).strip().strip('"'))
-        if not os.path.isfile(full):
-            raise FileNotFoundError(f"파일이 없습니다: {full}")
-        if os.path.splitext(full)[1].lower() not in TABLE_EXTS:
-            raise rt.InputError(f"읽을 수 있는 파일은 {', '.join(TABLE_EXTS)}입니다: {os.path.basename(full)}")
-        for wb in rt.open_workbooks():
-            if wb["path"] and os.path.normcase(wb["path"]) == os.path.normcase(full) and not wb["saved"]:
-                raise rt.InputError(f"{os.path.basename(full)}이(가) Excel에서 열려 있고 저장되지 않은 변경이 있습니다. "
-                                    "Excel에서 저장한 뒤 같은 명령을 다시 실행하세요 (도구가 대신 저장하지 않음).")
-        return full
-    books = rt.open_workbooks()
-    if not books:
-        raise rt.InputError("읽을 파일을 정하지 못했습니다 (열린 Excel 통합문서 없음). 사용자에게 파일 경로를 물어 --file \"<경로>\"로 주세요.")
-    unsaved = [b for b in books if not b["saved"]]
-    if len(books) == 1:
-        if unsaved:
-            raise rt.InputError(f"Excel의 {books[0]['name']}에 저장되지 않은 변경이 있습니다(저장한 적 없는 새 통합문서 포함). "
+def resolve_file(path: str) -> str:
+    """--file (Excel에 열려 있으면 저장됐는지만 봄). 열린 통합문서를 고르는 일은 _select_needs_input."""
+    full = os.path.abspath(str(path).strip().strip('"'))
+    if not os.path.isfile(full):
+        raise FileNotFoundError(f"파일이 없습니다: {full}")
+    if os.path.splitext(full)[1].lower() not in TABLE_EXTS:
+        raise rt.InputError(f"읽을 수 있는 파일은 {', '.join(TABLE_EXTS)}입니다: {os.path.basename(full)}")
+    for wb in rt.open_workbooks():
+        if wb["path"] and os.path.normcase(wb["path"]) == os.path.normcase(full) and not wb["saved"]:
+            raise rt.InputError(f"{os.path.basename(full)}이(가) Excel에서 열려 있고 저장되지 않은 변경이 있습니다. "
                                 "Excel에서 저장한 뒤 같은 명령을 다시 실행하세요 (도구가 대신 저장하지 않음).")
-        return books[0]["path"]
-    saved = [b for b in books if b["saved"]]
-    if not saved:
-        raise rt.InputError("열린 Excel 통합문서가 모두 저장되지 않았습니다. 읽을 문서를 Excel에서 저장한 뒤 다시 실행하세요.")
-    raise rt.ask([b["name"] for b in saved], [argv_setting("--file", b["path"]) for b in saved], "열린 Excel 통합문서 중 읽을 파일")
+    return full
 
 
 def _csv_rows(path: str) -> List[List[Any]]:
@@ -918,16 +914,22 @@ def op_join(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]],
     ldf2 = ldf.assign(**{f"__k{i}": lk[f"k{i}"].values for i in range(len(lkeys))})
     rdf2 = rdf.drop(columns=[k for k in keys if k in rdf.columns]).assign(**{f"__k{i}": rk[f"k{i}"].values for i in range(len(rkeys))})
     on = [f"__k{i}" for i in range(len(lkeys))]
-    out = ldf2.merge(rdf2, on=on, how="inner").drop(columns=on).reset_index(drop=True)
+    keep_left = bool(args.get("keep_left"))
+    out = ldf2.merge(rdf2, on=on, how="left" if keep_left else "inner").drop(columns=on).reset_index(drop=True)
     dup = int(rk.duplicated().sum())
     warnings = [f"{args['right_name']}에 같은 키가 여러 번 나오는 행이 {dup}개 있어 결과 행이 늘었습니다."] if dup else []
     # 짝이 없어 빠진 행 (양쪽에 있는 행만 남기므로): 몇 행이 빠졌는지 알림 (MBOM 2026-11-14: 110행 중 96행이 말없이 빠짐)
     lset, rset = set(map(tuple, lk.itertuples(index=False))), set(map(tuple, rk.itertuples(index=False)))
     lmiss = sum(1 for t in lk.itertuples(index=False) if tuple(t) not in rset)
     rmiss = sum(1 for t in rk.itertuples(index=False) if tuple(t) not in lset)
-    if lmiss or rmiss:
+    if keep_left and lmiss:
+        warnings.append(f"{args['left_name']}의 {lmiss}행(전체 {len(lk)}행)은 {args['right_name']}에 짝이 없어 {args['right_name']}의 열이 빈 칸입니다.")
+    if keep_left and rmiss:
+        warnings.append(f"짝이 없어 빠진 {args['right_name']} 행: {rmiss}행(전체 {len(rk)}행).")
+    if not keep_left and (lmiss or rmiss):
         warnings.append(f"짝이 없어 빠진 행: {args['left_name']} {lmiss}행(전체 {len(lk)}행), {args['right_name']} {rmiss}행(전체 {len(rk)}행). "
-                        f"한쪽에만 있는 행은 only로 볼 수 있습니다.")
+                        f"한쪽에만 있는 행은 only로 볼 수 있습니다."
+                        + (f" {args['left_name']}의 행을 모두 남기려면 {rt.full_command(argv_now() + ['--keep-left'])}" if lmiss else ""))
     letters = {**lmeta.get("letters", {}), **{rename.get(c, c): v for c, v in rmeta.get("letters", {}).items() if c not in keys}}
     meta = {"letters": letters, "rows": {**lrows, **rrows}, "kinds": {}}
     return out, meta, {"warnings": warnings}
@@ -1061,7 +1063,7 @@ def op_group(args: Dict[str, Any], inputs: Dict[str, Tuple[Any, Dict[str, Any]]]
     out_rows = []
     for key, g in work.groupby(by, sort=False, dropna=False):
         key = key if isinstance(key, tuple) else (key,)
-        row: Dict[str, Any] = {b: (None if v is None or v is pd.NA or (isinstance(v, float) and v != v) else v)
+        row: Dict[str, Any] = {b: (EMPTY_SHOWN if v is None or v is pd.NA or (isinstance(v, float) and v != v) else v)
                                for b, v in zip(by, key)}
         row["행 수"] = len(g)
         for c in sums:
@@ -1155,8 +1157,39 @@ def check_name(name: Optional[str], work: Work) -> str:
     return name
 
 
+def _select_needs_input(a: Any) -> rt.InputError:
+    """--file도 --from도 없는 select: 무엇을 읽을지 도구가 짐작하지 않고 멈춤 (사용자 결정 2026-11-14).
+    지금 표에서 고르는 명령과 Excel에 열린(저장된) 통합문서를 읽는 명령을 전체 명령으로 줌."""
+    cands, argvs = [], []
+    work = os.path.abspath(a.work) if getattr(a, "work", None) else current_work()
+    if work:
+        try:
+            cur = Work(work).resolve(None, "--from")[0]
+            cands.append(f"지금 표 {cur}에서 고르기")
+            argvs.append(argv_setting("--from", cur))
+        except Exception:
+            pass
+    books = rt.open_workbooks()
+    for b in books:
+        if b["saved"] and b["path"]:
+            cands.append(f"Excel에 열린 {b['name']} 읽기")
+            argvs.append(argv_setting("--file", b["path"]))
+    unsaved = [b["name"] for b in books if not b["saved"]]
+    note = f" (Excel에 저장하지 않은 문서 {', '.join(unsaved)}은(는) 저장해야 읽을 수 있음)" if unsaved else ""
+    head = "select에는 --file(파일 읽기)이나 --from(만든 표에서 고르기) 중 하나가 필요합니다" + note + "."
+    if not cands:
+        return rt.InputError(head + " 사용자에게 읽을 파일 경로를 물어 --file \"<경로>\"로 주세요.")
+    if len(cands) == 1:
+        return rt.InputError(f"{head} [추천] {rt.full_command(argvs[0])}")
+    err = rt.ask(cands, argvs, "읽을 대상")
+    err.args = (head + " " + err.args[0],) + err.args[1:]
+    return err
+
+
 def cmd_select(a: Any) -> Dict[str, Any]:
-    if a.file or (not a.source and not current_work() and not getattr(a, "work", None)):
+    if not a.file and not a.source:
+        raise _select_needs_input(a)
+    if a.file:
         path = resolve_file(a.file)
         if a.source:
             raise rt.InputError("--file과 --from은 함께 쓰지 않습니다 (파일을 읽거나, 만든 표에서 고르거나).")
@@ -1239,10 +1272,10 @@ def cmd_join(a: Any) -> Dict[str, Any]:
     work = open_work(a)
     work.check_sources()
     (ln, ls), (rn, rs) = _two(a, work, "left", "right")
-    args = {"on": a.on, "left_name": ln, "right_name": rn}
+    args = {"on": a.on, "left_name": ln, "right_name": rn, "keep_left": bool(a.keep_left)}
     df, meta, info = op_join(args, {"left": work.load(ls), "right": work.load(rs)}, "")
     name = check_name(a.name, work)
-    lineage = f"{name} = {ln}, {rn}을(를) {a.on} 기준으로 짝 맞춤 (양쪽에 있는 행만)"
+    lineage = f"{name} = {ln}, {rn}을(를) {a.on} 기준으로 짝 맞춤 " + (f"({ln}의 행은 모두)" if a.keep_left else "(양쪽에 있는 행만)")
     _sid, ok_ = work.add("join", name, args, {"left": ls, "right": rs}, df, meta, lineage)
     return table_answer("join", work, name, df, meta, lineage, ok_, info["warnings"])
 
@@ -1556,6 +1589,9 @@ def cmd_chart(a: Any) -> Dict[str, Any]:
                             f"단위가 다른 값을 함께 {'더해 ' if summed else ''}그렸습니다. 단위 하나만 보려면 먼저 "
                             f"{rt.full_command(['select', '--from', name, '--where', f'{unit}={units[0]}'])} 로 고른 표로 그리세요.")
     truncated = False
+    if kind == "line" and x and data[x].astype("string").duplicated().any():   # 사용자 결정 2026-11-14: 합계하지 않고 경고
+        warnings.append(f"--x '{x}'의 같은 값이 여러 행이라 선이 표 순서대로 같은 x를 오가며 그려졌습니다. 값마다 합계로 보려면 "
+                        f"{rt.full_command(argv_setting('--kind', 'bar'))} 로 막대를 그리세요.")
     if kind in ("bar", "pie") and x and data[x].astype("string").duplicated().any():
         data = data.assign(**{x: data[x].astype("string")}).groupby(x, sort=False, dropna=False)[ys].sum().reset_index()
         warnings.append(f"--x '{x}'의 같은 값이 여러 행이라 값마다 --y를 합계로 그렸습니다.")
@@ -1662,10 +1698,10 @@ def build_cli() -> rt.JsonArgumentParser:
         return p
 
     p = cmd("select", "파일(시트·범위)이나 만든 표에서 열과 조건으로 골라 이름 붙인 표 만들기")
-    p.add_argument("--file", help="읽을 파일 (.xlsx, .xlsm, .csv). 생략하면 만든 표(--from 또는 지금 표), 표가 없으면 열린 Excel 통합문서")
+    p.add_argument("--file", help="읽을 파일 (.xlsx, .xlsm, .csv). 만든 표에서 고를 때는 --from (둘 다 없으면 도구가 읽을 것을 묻는다)")
     p.add_argument("--sheet", help="시트 이름 (생략하면 파일을 열었을 때 보이는 시트)")
     p.add_argument("--range", help="읽을 범위 (예: B5:H230, B:H, 왼쪽 위 칸 B5). 생략하면 도구가 표를 찾음")
-    p.add_argument("--from", dest="source", help="고를 표 이름 (생략하면 지금 표)")
+    p.add_argument("--from", dest="source", help="고를 표 이름 (--file이 없으면 꼭 씀)")
     p.add_argument("--columns", help="남길 열 (이름이나 열 글자, ','로 나눔)")
     p.add_argument("--where", help="행 조건 (그리고 ;, 또는 |. 예: \"Level=1;Qty>2\", \"Maker=A|B\")")
     p.add_argument("--name", help="새 표 이름 (생략하면 df1, df2 ...)")
@@ -1682,6 +1718,8 @@ def build_cli() -> rt.JsonArgumentParser:
         p.add_argument("--right", required=True, help="오른쪽 표")
         p.add_argument("--on", required=True, help="키 열 (','로 나눔)")
         p.add_argument("--name", help="새 표 이름")
+        if name == "join":
+            p.add_argument("--keep-left", action="store_true", help="왼쪽 표의 행을 모두 남김 (짝이 없으면 오른쪽 열이 빈 칸)")
 
     p = cmd("diff", "두 표 비교: 추가·삭제 행과 바뀐 칸 (키 열로 짝)")
     p.add_argument("--old", required=True, help="옛 표")
@@ -1734,7 +1772,21 @@ def main(argv: Optional[List[str]] = None) -> None:
     rt.setup_console()
     rt.CURRENT_ARGV = [os.path.abspath(__file__)] + list(sys.argv[1:] if argv is None else argv)
     args = build_cli().parse_args(rt.CURRENT_ARGV[1:])
-    rt.run_cli(lambda: COMMANDS[args.cmd](args), hint="확인할 것: 표 이름, 열 이름, 파일 경로.")
+    rt.run_cli(lambda: _with_switch_notice(args), hint="확인할 것: 표 이름, 열 이름, 파일 경로.")
+
+
+def _with_switch_notice(args: Any) -> Dict[str, Any]:
+    """명령 실행. --work로 지금 작업 폴더가 바뀌었으면 preview(실패면 message) 앞에 그 사실을 붙임."""
+    SWITCHED.clear()
+    try:
+        out = COMMANDS[args.cmd](args)
+    except rt.InputError as e:
+        if SWITCHED and e.args:
+            e.args = (f"{SWITCHED[0]} {e.args[0]}",) + e.args[1:]
+        raise
+    if SWITCHED:
+        out["preview"] = f"{SWITCHED[0]} {out.get('preview', '')}".strip()
+    return out
 
 
 if __name__ == "__main__":

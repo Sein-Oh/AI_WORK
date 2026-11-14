@@ -242,14 +242,34 @@ def test_open_unsaved_workbook_is_not_read(env, monkeypatch, capsys):
         pk.main(["select", "--file", path])
     out = json.loads(capsys.readouterr().out)
     assert e.value.code == 1 and "저장한 뒤" in out["message"]
-    # --file 없이: 열린 통합문서가 여럿이면 [후보]와 같은 번호의 전체 명령
-    other = make_bom(env["dir"] / "B2.xlsx")
-    monkeypatch.setattr(rt, "open_workbooks", lambda: [{"path": path, "name": "BOM.xlsx", "saved": True},
-                                                      {"path": other, "name": "B2.xlsx", "saved": True}])
-    with pytest.raises(SystemExit):
-        pk.main(["select"])
-    out = json.loads(capsys.readouterr().out)
-    assert "[후보] 1) BOM.xlsx 2) B2.xlsx" in out["message"] and len(out["confirm_commands"]) == 2
+
+
+def test_select_without_file_or_from_stops_and_gives_full_commands(env, monkeypatch, capsys):
+    """--file도 --from도 없으면 도구가 짐작하지 않고 멈춤 (사용자 결정 2026-11-14: 지금 표인지 열린 통합문서인지 헷갈렸음)."""
+    path, other = make_bom(env["dir"] / "BOM.xlsx"), make_bom(env["dir"] / "B2.xlsx")
+
+    def select_alone(books):
+        monkeypatch.setattr(rt, "open_workbooks", lambda: books)
+        with pytest.raises(SystemExit) as e:
+            pk.main(["select"])
+        out = json.loads(capsys.readouterr().out)
+        assert e.value.code == 1 and out["agent_directive"].startswith("STOP_RETRY:"), out
+        assert out["message"].startswith("select에는 --file(파일 읽기)이나 --from(만든 표에서 고르기) 중 하나가 필요합니다"), out
+        return out
+
+    out = select_alone([])
+    assert "읽을 파일 경로를 물어" in out["message"]
+    out = select_alone([{"path": path, "name": "BOM.xlsx", "saved": True}, {"path": other, "name": "B2.xlsx", "saved": True}])
+    assert "[후보] 1) Excel에 열린 BOM.xlsx 읽기 2) Excel에 열린 B2.xlsx 읽기" in out["message"]
+    assert [command_args(c["command"]) for c in out["confirm_commands"]] == [["select", "--file", path], ["select", "--file", other]]
+    out = select_alone([{"path": path, "name": "BOM.xlsx", "saved": True}, {"path": "", "name": "통합 문서1", "saved": False}])
+    assert "저장하지 않은 문서 통합 문서1" in out["message"] and recommended(out["message"]) == ["select", "--file", path]
+    monkeypatch.setattr(rt, "open_workbooks", lambda: [])
+    ok(env, "select", "--file", path, "--name", "df1")
+    out = select_alone([])
+    assert recommended(out["message"]) == ["select", "--from", "df1"]
+    out = select_alone([{"path": other, "name": "B2.xlsx", "saved": True}])
+    assert "[후보] 1) 지금 표 df1에서 고르기 2) Excel에 열린 B2.xlsx 읽기" in out["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +375,15 @@ def test_group_counts_sums_and_warns_mixed_units(env):
     assert code == 1 and "[후보] 1) Level 2) Qty" in err["message"]
     assert command_args(err["confirm_commands"][1]["command"])[-2:] == ["--sum", "Qty"]
     assert ok(env, "group", "--from", "df1", "--by", "Maker")["columns"][1]["name"] == "행 수"
+
+
+def test_group_names_the_empty_value_group(env):
+    """빈 값 묶음은 null이 아니라 '(빈 칸)' (사용자 결정 2026-11-14)."""
+    rows = [(1, "TOP", "0102", 2, "A", "x"), (1, "TOP", "0105", 3, None, "x"), (1, "TOP", "0200", 4, None, "x")]
+    ok(env, "select", "--file", make_bom(env["dir"] / "BOM.xlsx", rows=rows), "--name", "df1")
+    g = ok(env, "group", "--by", "Maker", "--sum", "Qty")
+    got = [(r["Maker"], r["행 수"], r["Qty 합계"]) for r in ok(env, "show", "--from", g["table"])["rows"]]
+    assert got == [("A", 1, 2), ("(빈 칸)", 2, 7)]
 
 
 def test_sort_keeps_excel_rows_and_puts_empty_cells_last(env):
@@ -491,6 +520,10 @@ def test_chart_sums_repeated_x_limits_bars_and_checks_columns(env):
     assert code == 1 and "--x가 필요합니다" in err["message"]
     code, err = run(env, "chart", "--y", "Qty", "--save", "그림.jpg")
     assert code == 1 and recommended(err["message"])[-2:] == ["--save", "그림.png"]
+    line = ok(env, "chart", "--kind", "line", "--x", "Maker", "--y", "Qty")     # 사용자 결정 2026-11-14: 선은 합계하지 않고 경고
+    warn = next(w for w in line["warnings"] if "오가며" in w)
+    assert line["count"] == 40 and command_args(warn.split("보려면 ")[1].split(" 로 ")[0])[-6:] == ["--kind", "bar", "--x", "Maker", "--y", "Qty"]
+    assert not any("오가며" in w for w in ok(env, "chart", "--kind", "line", "--x", "Part Number", "--y", "Qty").get("warnings", []))
     named = ok(env, "chart", "--y", "Qty", "--save", "수량", "--title", "부품별 수량")
     assert named["output_file"] == os.path.join(named["work"], "수량.png")
 
@@ -604,3 +637,33 @@ def test_mbom_join_on_excel_row_keeps_the_original_excel_rows(env, mbom):
     ok(env, "select", "--from", "v2p", "--name", "v2q")
     out = ok(env, "diff", "--old", "v2p", "--new", "v2q", "--on", "경로")
     assert out["count"] == 0
+
+
+def test_mbom_join_keep_left_keeps_every_left_row(env, mbom):
+    """left join (사용자 결정 2026-11-14): --keep-left면 왼쪽 행을 모두 남기고 짝이 없으면 오른쪽 열은 빈 칸."""
+    inner = ok(env, "join", "--left", "v1", "--right", "rt", "--on", "Part Number=Item,Op No")
+    warn = next(w for w in inner["warnings"] if "짝이 없어 빠진 행" in w)
+    fixed = command_args("python x.py " + warn.split("남기려면 python ", 1)[1].split(" ", 1)[1])
+    assert inner["count"] == 4 and fixed[-1] == "--keep-left"
+    out = ok(env, *fixed[:-1], "--keep-left", "--name", "j2")
+    assert out["count"] == 110 and "(v1의 행은 모두)" in out["preview"]
+    assert any("v1의 106행(전체 110행)은 rt에 짝이 없어" in w for w in out["warnings"])
+    rows = ok(env, "show", "--from", "j2", "--columns", "Part Number,Operation")["rows"]
+    assert [r["v1 행"] for r in rows[:3]] == [7, 8, 9] and rows[0]["Operation"] == "최종 조립" and rows[2]["Operation"] is None
+    assert ok(env, "undo")["status"] == "ok" and ok(env, "show", "--from", "v1")["count"] == 110   # 기록으로 다시 만들 수 있음
+
+
+def test_work_option_says_when_the_current_work_folder_changes(env, mbom):
+    """--work는 어느 명령에서나 그 작업 폴더로 옮겨 감 (사용자 결정 2026-11-14), 옮겼으면 preview 앞에 알림."""
+    first = mbom["v1"]["work"]
+    ok(env, "new")
+    other = ok(env, "select", "--file", str(mbom["dir"] / "MBOM_DR200_v2.xlsx"), "--name", "a")["work"]
+    assert other != first
+    out = ok(env, "show", "--from", "v1", "--work", first)
+    assert out["preview"].startswith(f"지금 작업 폴더를 {os.path.basename(first)}(으)로 바꿨습니다 (전: {os.path.basename(other)}).")
+    assert not ok(env, "show", "--from", "v1", "--work", first)["preview"].startswith("지금 작업 폴더를")   # 이미 그 폴더면 조용함
+    assert ok(env, "show", "--from", "v2")["work"] == first                                              # 다음 명령도 그 폴더
+    code, out = run(env, "show", "--from", "a", "--work", other)                                         # a는 other에 있음
+    assert code == 0
+    code, out = run(env, "show", "--from", "zz", "--work", first)
+    assert code == 1 and out["message"].startswith("지금 작업 폴더를")                                       # 실패해도 옮긴 것은 알림

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""mbom-diff 조합 스킬(tools/skills/mbom-diff)을 SKILL.md 순서 그대로 실행해, make_mbom_samples의 정답(MOD_CHANGES)과 맞춰 본다.
+"""mbom-diff 기본 스킬(AIKIT/.opencode/skills/mbom-diff)을 SKILL.md 순서 그대로 실행해, make_mbom_samples의 정답(MOD_CHANGES)과 맞춰 본다.
 스킬 스크립트가 낸 next_commands는 글자 그대로 실행한다 (LLM이 하듯)."""
 import json
 import os
@@ -12,7 +12,7 @@ from pk_helpers import command_args, env, ok  # noqa: F401  (env는 fixture)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.join(os.path.dirname(HERE), "tools")
-SKILL = os.path.join(TOOLS, "skills", "mbom-diff")
+SKILL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(HERE))), ".opencode", "skills", "mbom-diff")
 sys.path.insert(0, TOOLS)
 import make_mbom_samples as samples  # noqa: E402
 
@@ -70,10 +70,10 @@ def test_v2_mod_changes_are_found_exactly_and_traps_are_not_changes(env, files):
         assert (r["oldp 행"] is not None) == (r["구분"] != "추가") and (r["newp 행"] is not None) == (r["구분"] != "삭제"), r
     purposes = [c["purpose"] for c in diff["confirm_commands"]]   # 두 원본에 칠하는 office-cli 명령, 행과 칸을 나눠 셈
     assert len(purposes) == 2 and "삭제된 3행, 바뀐 칸 8곳" in purposes[0] and "추가된 3행, 바뀐 칸 8곳" in purposes[1], purposes
-    assert summary["counts"] == {"이동": 1, "대체 후보": 1, "추가": 1, "삭제": 1, "바뀐 칸": 8}
+    assert summary["counts"] == {"대체 후보": 1, "추가": 2, "삭제": 2, "바뀐 칸": 8}
     text = summary["preview"]
-    assert text.startswith("변경 이동 1건, 대체 후보 1건, 추가 1건, 삭제 1건, 바뀐 칸 8곳 (7개 품목).")
-    for line in ("[이동] 110040: DR-200/100100 아래 -> DR-200 아래",
+    assert text.startswith("변경 대체 후보 1건, 추가 2건, 삭제 2건, 바뀐 칸 8곳 (7개 품목).") and "[이동]" not in text
+    for line in ("[삭제] 110040: DR-200/100100 아래 (옛 엑셀 행 17)", "[추가] 110040: DR-200 아래 (새 엑셀 행 109)",
                  "[대체 후보] 600160 -> 600161: DR-200/100600 아래 같은 자리",
                  "[추가] 600180: DR-200/100600 아래", "[삭제] 900020: DR-200 아래",
                  "[바뀜] 300213 (DR-200/100300/300210#1 아래): Qty 3 -> 4",
@@ -85,7 +85,7 @@ def test_v2_mod_changes_are_found_exactly_and_traps_are_not_changes(env, files):
 
 def test_v1_to_v2_and_same_file(env, files):
     _d, _r, summary = compare(env, files / "MBOM_DR200.xlsx", files / "MBOM_DR200_v2.xlsx")
-    assert summary["counts"] == {"이동": 0, "대체 후보": 0, "추가": 0, "삭제": 1, "바뀐 칸": 2}
+    assert summary["counts"] == {"대체 후보": 0, "추가": 0, "삭제": 1, "바뀐 칸": 2}
     assert "[삭제] 110050: DR-200/100100 아래" in summary["preview"]
     _d, rows, summary = compare(env, files / "MBOM_DR200_v2.xlsx", files / "MBOM_DR200_v2.xlsx")
     assert rows == [] and summary["count"] == 0 and summary["preview"] == "두 판이 같습니다 (찾은 변경 없음)."

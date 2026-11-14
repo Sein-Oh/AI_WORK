@@ -22,8 +22,8 @@ OpenCode, Claude Code(CLAUDE.md가 이 파일을 불러옴) 등 이 저장소에
   설정 파일 없이 폴더 모양으로 읽힌다: `AIKIT/AGENTS.md`(전역 지침이라 부르지만 이 프로젝트의 지침), `AIKIT/.opencode/skills/<스킬 이름>/SKILL.md`(스킬: 폴더 하나 = 스킬 하나),
   `AIKIT/opencode.json`(셸·권한·폐쇄망 잠금). 사내 LLM 설정(`opencode.jsonc`)과 폐쇄망 잠금은 사용자 전역 설정(`%USERPROFILE%\.config\opencode`)에
   두어 모든 프로젝트에 적용한다 (setup이 `opencode.json`을 전역에 합침, 예전 `OPENCODE_CONFIG_DIR=C:\AIKIT`는 지움).
-- `AIKIT/.opencode/skills/`: 기본 스킬 13개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`, `excel-format-kit`,
-  `word-kit`, `ppt-kit`, `outlook-kit`, `search-kit`, `stats-kit`, pandas-kit: `pandas-kit`). 그 밖의 폴더는 사용자가 만든 스킬(git 제외).
+- `AIKIT/.opencode/skills/`: 기본 스킬 14개 (ml-kit: `ml-train`, `ml-predict`, `ml-report`, `ml-map`, `ml-dataset`, office-cli: `excel-kit`, `excel-format-kit`,
+  `word-kit`, `ppt-kit`, `outlook-kit`, `search-kit`, `stats-kit`, pandas-kit: `pandas-kit`, `mbom-diff`). 그 밖의 폴더는 사용자가 만든 스킬(git 제외).
   스킬이 여러 개를 함께 쓰는 도구는 스킬 폴더가 아니라 도구 폴더에 두고, SKILL.md에는 `python "C:\AIKIT\<tool>\<파일>.py" ...` 전체 명령을 적는다.
   사용자가 만든 스킬의 스크립트는 그 스킬 폴더의 `scripts/`에 둔다 (스킬 폴더만 복사하면 동료 PC에서도 됨).
 - `AIKIT/<tool>/`: **실행에 필요한 .py만** 둔다. 런타임이 만드는 `data/`(오류 로그 등, git 제외)만 예외.
