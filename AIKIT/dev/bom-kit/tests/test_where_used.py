@@ -1,37 +1,23 @@
 # -*- coding: utf-8 -*-
-"""where-used 기본 스킬(AIKIT/.opencode/skills/where-used)을 SKILL.md 순서 그대로 실행해,
-make_mbom_samples의 MBOM에서 품목이 쓰인 상위와 제품 1대당 수량이 맞는지 본다."""
-import json
+"""where-used 기본 스킬의 명령 하나(bom.py where-used)로 make_mbom_samples의 MBOM에서 품목이 쓰인 상위와
+제품 1대당 수량이 맞는지 본다."""
 import os
-import subprocess
-import sys
 
 import pytest
 
-from pk_helpers import env, ok  # noqa: F401  (env는 fixture)
+from bk_helpers import AIKIT, bom, command_args, make_samples
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-TOOLS = os.path.join(os.path.dirname(HERE), "tools")
-SKILL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(HERE))), ".opencode", "skills", "where-used")
+SKILL = os.path.join(AIKIT, ".opencode", "skills", "where-used")
 
 
 def script(*args):
-    p = subprocess.run([sys.executable, os.path.join(SKILL, "scripts", "where_used.py"), *map(str, args)],
-                       capture_output=True, text=True, encoding="utf-8", env=os.environ.copy())
-    lines = [l for l in p.stdout.splitlines() if l.strip()]
-    assert len(lines) == 1, (p.stdout, p.stderr)
-    return p.returncode, json.loads(lines[0])
+    return bom("where-used", *args)
 
 
 @pytest.fixture
 def bom_csv(env):
-    out = env["dir"] / "mbom"
-    p = subprocess.run([sys.executable, os.path.join(TOOLS, "make_mbom_samples.py"), "--out", str(out)],
-                       capture_output=True, text=True, encoding="utf-8")
-    assert p.returncode == 0, p.stderr
-    ok(env, "new")
-    ok(env, "select", "--file", str(out / "MBOM_DR200.xlsx"), "--name", "bom")
-    return ok(env, "export", "--from", "bom", "--save", "bom.csv")["output_file"]
+    """이름은 그대로 두지만 이제 BOM 엑셀 파일 (도구가 pandas-kit으로 읽음)."""
+    return make_samples(env["dir"] / "mbom") / "MBOM_DR200.xlsx"
 
 
 def test_where_used_finds_every_place_and_the_quantity_per_product(bom_csv):
@@ -61,23 +47,23 @@ def test_a_word_in_the_name_finds_every_part_and_counts_them_apart(bom_csv):
                            "900020 나사 고정제: 1곳, 제품 1대당 0.5 ML"]              # 단위가 다르면 따로
 
 
-def test_nothing_found_and_a_missing_column_stop_cleanly(bom_csv, env):
+def test_nothing_found_and_a_missing_column_stop_cleanly(bom_csv):
     code, d = script("--file", bom_csv, "--find", "없는품번")
     assert code == 0 and d["count"] == 0 and "찾지 못했습니다" in d["preview"] and "0건" in d["agent_directive"]
     code, d = script("--file", bom_csv, "--find", "000125", "--part", "없는열")
-    assert code == 1 and d["agent_directive"].startswith("STOP_RETRY:") and "없는열" in d["message"]
-    only = ok(env, "select", "--from", "bom", "--columns", "Description,Qty", "--name", "일부")
-    path = ok(env, "export", "--from", "일부", "--save", "일부.csv")["output_file"]
-    code, d = script("--file", path, "--find", "볼트")
-    assert code == 1 and "품번 열을 찾지 못했습니다" in d["message"] and "--part" in d["message"]
+    assert code == 1 and d["error_type"] == "needs_user_decision" and "'없는열' 열이 없습니다" in d["message"]
+    pick = [c["command"] for c in d["confirm_commands"] if "Part Number" in c["command"]][0]
+    code, d = bom(*command_args(pick))                                   # 고른 열로 다시
+    assert code == 0 and d["count"] == 10
+    code, d = script("--file", bom_csv.parent / "없음.xlsx", "--find", "볼트")
+    assert code == 1 and d["message"].startswith("BOM을(를) 읽다가 멈췄습니다") and "python" not in d["message"]
 
 
-def test_skill_md_commands_exist_and_are_short():
+def test_skill_md_is_one_command_and_short():
     with open(os.path.join(SKILL, "SKILL.md"), "rb") as f:
         raw = f.read().replace(b"\r\n", b"\n")
     assert len(raw) <= 8192
     text = raw.decode("utf-8")
-    assert "name: where-used" in text and 'version: "0.1.0"' in text
-    for opt in ("--file", "--find", "--level", "--part", "--qty"):
-        assert opt in text
+    assert "name: where-used" in text and 'version: "0.2.0"' in text
+    assert text.count(r'python "C:\AIKIT\bom-kit\bom.py" where-used --file') == 1 and "pandas_kit.py" not in text
     assert "mbom-diff" in text                                           # 두 판 비교는 그쪽이라고 알려 줌

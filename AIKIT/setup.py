@@ -7,7 +7,7 @@ r"""C:\AIKIT 설치 (사람이 실행: setup.bat 두 번 클릭, 또는 python C
     python setup.py --no-path       # 시스템 PATH는 건드리지 않음
 
 하는 일 (C:\AIKIT = 이 파일이 있는 폴더):
-1. C:\AIKIT 프로젝트 파일 확인: AGENTS.md(프로젝트 지침), .opencode\skills\<이름>\SKILL.md(기본 스킬 14개와 사용자 스킬),
+1. C:\AIKIT 프로젝트 파일 확인: AGENTS.md(프로젝트 지침), .opencode\skills\<이름>\SKILL.md(기본 스킬 15개와 사용자 스킬),
    opencode.json(셸·권한·폐쇄망 잠금). OpenCode는 C:\AIKIT을 프로젝트로 연 대화(web.bat, C:\AIKIT에서 실행한 opencode)에서만 이것을 읽습니다.
 2. OpenCode 전역 설정(%USERPROFILE%\.config\opencode): 우리 opencode.json의 셸·권한·폐쇄망 잠금을 전역 opencode.json에 합칩니다
    (모든 프로젝트에 적용, 사용자 결정 2026-11-13). 원래 파일은 data\setup_backup_<시각>에 보관하고, 쓴 뒤 다시 읽어 확인합니다.
@@ -34,8 +34,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))                  # C:\AIKIT (배포 폴더)
 OFFICE_SKILLS = ("excel-kit", "excel-format-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")    # .opencode\skills\<이름>\SKILL.md (office-cli)
 ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")                     # .opencode\skills\<이름>\SKILL.md (ml-kit)
-PANDAS_SKILLS = ("pandas-kit", "mbom-diff", "where-used")                                                       # .opencode\skills\<이름>\SKILL.md (pandas-kit)
-DEFAULT_SKILLS = ML_SKILLS + OFFICE_SKILLS + PANDAS_SKILLS                                       # 기본 스킬 14개
+PANDAS_SKILLS = ("pandas-kit",)                                                                 # .opencode\skills\<이름>\SKILL.md (pandas-kit)
+BOM_SKILLS = ("mbom-diff", "where-used")                                                       # .opencode\skills\<이름>\SKILL.md (bom-kit + pandas-kit)
+DEFAULT_SKILLS = ML_SKILLS + OFFICE_SKILLS + PANDAS_SKILLS + BOM_SKILLS                          # 기본 스킬 15개
 ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"     # 시스템 환경 변수 (HKLM)
 USER_ENV_KEY = "Environment"                                                   # 사용자 환경 변수 (HKCU)
 CONFIG_ENV = "OPENCODE_CONFIG_DIR"                                             # OpenCode 전역 설정 폴더를 바꾸는 환경 변수 (예전 설치가 C:\AIKIT으로 넣음, 지금은 지움)
@@ -51,7 +52,7 @@ LIBS = (("numpy", "numpy"), ("pandas", "pandas"), ("scikit-learn", "sklearn"), (
         ("openpyxl", "openpyxl"), ("python-docx", "docx"), ("python-pptx", "pptx"), ("matplotlib", "matplotlib"),
         ("pymupdf", "pymupdf"), ("olefile", "olefile"), ("pywin32", "win32com.client"))
 TOOL_HELP = (("ml-kit", os.path.join("ml-kit", "ml_predict.py")), ("office-cli", os.path.join("office-cli", "office.py")),
-             ("pandas-kit", os.path.join("pandas-kit", "pandas_kit.py")))
+             ("pandas-kit", os.path.join("pandas-kit", "pandas_kit.py")), ("bom-kit", os.path.join("bom-kit", "bom.py")))
 LONG_PATH = 2047                                                     # 이보다 길면 일부 프로그램이 뒤쪽 PATH를 못 봄
 
 
@@ -133,7 +134,7 @@ def version_of(data):
 
 
 def step_sources(rep):
-    """C:\\AIKIT 프로젝트 파일(기본 스킬 14개, 프로젝트 지침, opencode.json)이 있는지."""
+    """C:\\AIKIT 프로젝트 파일(기본 스킬 15개, 프로젝트 지침, opencode.json)이 있는지."""
     missing = [(n, p) for n, p in sources() if not os.path.isfile(p)]
     for name, path in missing:
         rep.line("FAIL", f"{name}: 파일이 없습니다: {path} (저장소의 AIKIT 폴더를 통째로 다시 복사하세요. .opencode 폴더도 함께)")

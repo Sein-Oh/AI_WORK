@@ -6,6 +6,7 @@
 ## 지금 유효한 원칙
 | 날짜 | 결정 | 반영된 곳 |
 |---|---|---|
+| 2026-11-14 | bom-kit: BOM 업무 규칙(Level로 상위·경로, 두 판 비교 묶기, 쓰인 곳·제품 1대당 수량)을 한 도구(`AIKIT/bom-kit/bom.py`)에 모음. 스킬은 둘(`mbom-diff`, `where-used`)로 두고 스킬 폴더 스크립트는 없앰. pandas-kit과 따로 배포되는 완결형 도구 (pandas-kit을 import하지 않고 실행만). 스킬마다 bom.py 명령 하나 (Gemma급 검토: 13단계를 잇다 중간 지시를 따라가 멈출 위험) | `AGENTS.md` 저장소 성격·폴더 구조·도구별 규칙, `AIKIT/AGENTS.md` 2장·9장, setup.py |
 | 2026-11-14 | MBOM 두 판 비교(mbom-diff)는 기본 스킬 (pandas-kit을 조합한 업무 스킬, 스크립트는 스킬 폴더 `scripts\`). 짝은 경로(품번 기준)로 맞추고, 다른 상위로 옮겨진 품목은 이동이 아니라 삭제·추가로, 같은 자리에서 품번이 바뀐 것만 대체 후보 (품명은 보지 않음). pandas-kit `select`는 `--file`·`--from` 중 하나가 꼭 필요 (없으면 읽을 것을 묻고 멈춤). `--work`는 어느 명령에서나 그 작업 폴더로 옮겨 가고 옮겼으면 알림. `join --keep-left`(왼쪽 행을 모두 남김) | `AGENTS.md` 폴더 구조, `AIKIT/AGENTS.md` 3장, mbom-diff SKILL.md, pandas-kit CHANGELOG 0.2.3 |
 | 2026-11-13 | 구분자 규칙의 예외: 메일 주소·파일 경로·첨부 이름 목록은 `;` (Outlook과 같고 경로에 `,`가 들어갈 수 있음). 같은 일 두 사용법·같은 이름 다른 뜻을 정리(outlook `--in`, ppt notes `--slide`, word header `--part`, 서식 지우기 `style --clear`, reader index `--file`, ml `--dtypes 열=형식`) | `AGENTS.md` 사용법 단순성 3번, office-cli·ml-kit CHANGELOG |
 | 2026-11-13 | pandas-kit은 기반 도구 (office-cli와 같은 개념: 조합용 단위 기능, BOM 분석 같은 업무 판단은 스킬). 읽기·칠하기·메모는 office-cli, 표 계산은 pandas-kit, LLM에게 pandas 코드를 짜게 하지 않음 | `AGENTS.md` 저장소 성격·도구별 규칙 |

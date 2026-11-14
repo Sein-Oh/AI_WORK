@@ -47,7 +47,7 @@
    파일 내용이나 행 수 확인도 스킬로 한다: 엑셀/CSV는 `excel.py read --target "<파일>"`, 그 밖의 문서는 `reader.py read --file "<파일>"`.
    파일 찾기에 파일이 안 나와도 사용자가 준 경로로 스킬 명령을 그대로 실행한다 (파일이 없으면 도구가 알려 준다).
    위 표와 각 SKILL.md 명령 표에 없는 일은 8장대로 한다 (8장의 "나. 하지 않는 일"은 파이썬으로도 하지 않는다).
-2. 도구는 `C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`, `C:\AIKIT\pandas-kit`에만 있다 (다른 폴더, 예: `C:\AIKIT\dev` 아래 경로는 데이터가 있는 곳일 뿐 도구 위치가 아니다). SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
+2. 도구는 `C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`, `C:\AIKIT\pandas-kit`, `C:\AIKIT\bom-kit`에만 있다 (다른 폴더, 예: `C:\AIKIT\dev` 아래 경로는 데이터가 있는 곳일 뿐 도구 위치가 아니다). SKILL.md의 명령 경로를 그대로 쓴다. 한 요청이 두 작업에 걸치면(예: 메일 첨부를 검색) 두 스킬을 차례로 쓴다.
 3. 해당 스킬의 SKILL.md를 먼저 읽고, 템플릿 명령을 그대로 쓴다. `<...>` 부분만 바꾸고 옵션이나 명령 이름을 지어내지 않는다.
    스킬 불러오기가 실패하면 아래 파일을 읽기 도구로 직접 읽는다. 읽기 전에는 도구 명령을 실행하지 않는다.
    `C:\AIKIT\.opencode\skills\<스킬 이름>\SKILL.md` (예: `C:\AIKIT\.opencode\skills\excel-kit\SKILL.md`, `C:\AIKIT\.opencode\skills\ml-train\SKILL.md`)
@@ -62,7 +62,7 @@
    사용자에게 보여 주고 "예"를 받은 뒤에만 그 `command`를 글자 그대로 1번 실행한다. 사용자가 이번 요청에서 그 변경을 하라고 했거나(예: "판정은 메모로 달아줘")
    "묻지 말고 끝까지" 하라고 했으면 다시 묻지 않는다. 단 `"destructive": true`인 항목(덮어쓰기·삭제·메일 발송)과 5장의 일(새 시트 포함)은 그래도 늘 묻는다.
 7. 파일 경로, 타겟 컬럼처럼 작업에 꼭 필요한 값을 모르면 실행 전에 사용자에게 묻는다.
-8. 도구 코드(`C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`, `C:\AIKIT\pandas-kit` 아래 .py 파일)는 사용자가 코드를 열어 보라고 직접 요청할 때만 읽고, 고치지 않는다.
+8. 도구 코드(`C:\AIKIT\ml-kit`, `C:\AIKIT\office-cli`, `C:\AIKIT\pandas-kit`, `C:\AIKIT\bom-kit` 아래 .py 파일)는 사용자가 코드를 열어 보라고 직접 요청할 때만 읽고, 고치지 않는다.
    스킬 명령 표에 없는 일이면 8장대로 한다. 스킬 명령이 `STOP_RETRY:`·`ERROR:`로 멈추면 먼저 4장대로 한다 (`[추천]` 1번 실행, `[후보]`·`needs_user_decision`·시트 보호·파일 없음은 사용자에게 묻기).
    `ERROR:`가 나왔거나 `[추천]`을 1번 실행했는데도 또 실패하면 그때는 파이썬으로 해도 된다: "도구로 처리하지 못해 파이썬으로 직접 처리합니다"라고 1줄 알리고 8장 1~6번대로.
    단 사용자에게 물어야 하는 일(위 묻기, 5장의 일)은 파이썬으로 돌아가지 않고 묻는다. `error_type: not_supported`(도구로 하지 않는 일)는 파이썬으로도 하지 않는다 (8장 나).
@@ -151,11 +151,11 @@ LLM이 아는 방법으로 파이썬 스크립트를 짜서 한다 (가의 일�
 | 무엇 | 파일 (고칠 때도 이것) |
 |---|---|
 | 전역 지침 (이 파일, `C:\AIKIT` 프로젝트의 지침) | `C:\AIKIT\AGENTS.md` |
-| 스킬 (기본 15개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit, mbom-diff, where-used, mbom-diff, 그리고 사용자가 만든 스킬) | `C:\AIKIT\.opencode\skills\<스킬 이름>\SKILL.md` (폴더 하나 = 스킬 하나, 스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
+| 스킬 (기본 15개: excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit, ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit, mbom-diff, where-used, 그리고 사용자가 만든 스킬) | `C:\AIKIT\.opencode\skills\<스킬 이름>\SKILL.md` (폴더 하나 = 스킬 하나, 스킬이 쓰는 스크립트는 그 폴더의 `scripts\`) |
 | 셸·권한·폐쇄망 잠금 | `C:\AIKIT\opencode.json` (고친 뒤 `C:\AIKIT\setup.bat`을 다시 실행하면 전역 설정 `%USERPROFILE%\.config\opencode\opencode.json`에 합쳐짐) |
 | 사내 LLM 연결 설정 | `%USERPROFILE%\.config\opencode\opencode.jsonc` |
 | 사람용 사용 가이드 (사용자가 사용법을 물으면 이 파일을 브라우저로 열어 보라고 알림) | `C:\AIKIT\guide\office-cli_사용가이드.html`, `C:\AIKIT\guide\ml-kit_사용가이드.html` |
-| 도구 오류 기록 | `C:\AIKIT\office-cli\data\logs\errors.txt`, `C:\AIKIT\ml-kit\data\logs\errors.txt`, `C:\AIKIT\pandas-kit\data\logs\errors.txt` (도구가 실패할 때 저절로 덧붙임) |
+| 도구 오류 기록 | `C:\AIKIT\office-cli\data\logs\errors.txt`, `C:\AIKIT\ml-kit\data\logs\errors.txt`, `C:\AIKIT\pandas-kit\data\logs\errors.txt`, `C:\AIKIT\bom-kit\data\logs\errors.txt` (도구가 실패할 때 저절로 덧붙임) |
 
 - 위 파일을 고친 뒤 OpenCode를 모두 닫았다가 다시 시작하면 반영된다 (안 되면 `C:\AIKIT\web.bat stop` 뒤 다시 실행).
 - 이 파일들은 사용자가 고쳐 달라고 직접 요청할 때만 고치고, 고치기 전에 바꿀 내용을 보여 주고 "예"를 받는다 (5장).
