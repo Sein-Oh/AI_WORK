@@ -1,4 +1,4 @@
-# pandas-kit (0.2.7)
+# pandas-kit (0.2.8)
 
 엑셀·CSV 표를 단계별로 고르고 비교하는 기반 도구입니다 (office-cli처럼 조합해 쓰는 단위 기능, BOM 분석 같은 업무 판단은 스킬이 함). 원본 파일은 쓰지 않고, 단계마다 이름 붙인 표(`df1`, `df2`)를
 작업 폴더에 쌓습니다. 결과는 원본의 엑셀 행 번호와 열 글자를 함께 가져서, 원본의 어느 칸인지 잃지 않습니다.
@@ -14,6 +14,7 @@
 | `AIKIT/pandas-kit/pandas_kit.py` | 진입점. `python pandas_kit.py <명령> ...` |
 | `AIKIT/pandas-kit/_pd_runtime.py` | 공통 런타임 (진입점 아님): `run_cli`, `JsonArgumentParser`, `quote_arg`, 오류 로그, 파일 복구 함수, 열린 Excel 경로 찾기. ml-kit `_ml_runtime.py`와 같은 이름·같은 동작 |
 | `tests/` | `python -m pytest -q AIKIT/dev/pandas-kit/tests` |
+| `AIKIT/.opencode/skills/where-used/` | 기본 스킬: BOM 한 판에서 품목이 쓰인 상위와 제품 1대당 수량 (`scripts/where_used.py`). 두 판 비교는 `mbom-diff` |
 | `tools/make_mbom_samples.py` | 시험용 MBOM 두 판(`MBOM_DR200.xlsx`, `_v2`)을 `AIKIT/dev/work/pandas`(git 제외)에 만듦: `python AIKIT/dev/pandas-kit/tools/make_mbom_samples.py [--out <폴더>]`. 상위 열 없이 Level로만 구조, 제목 블록·숨긴 행·글자로 저장된 숫자·단위 섞임 등 함정 |
 
 필요한 라이브러리: pandas, openpyxl (xlsx), matplotlib (차트), pywin32 (Windows에서 열린 Excel 경로 찾기만, 없어도 됨). `requirements.txt`.

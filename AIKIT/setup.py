@@ -34,7 +34,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))                  # C:\AIKIT (배포 폴더)
 OFFICE_SKILLS = ("excel-kit", "excel-format-kit", "word-kit", "ppt-kit", "outlook-kit", "search-kit", "stats-kit")    # .opencode\skills\<이름>\SKILL.md (office-cli)
 ML_SKILLS = ("ml-train", "ml-predict", "ml-report", "ml-map", "ml-dataset")                     # .opencode\skills\<이름>\SKILL.md (ml-kit)
-PANDAS_SKILLS = ("pandas-kit", "mbom-diff")                                                       # .opencode\skills\<이름>\SKILL.md (pandas-kit)
+PANDAS_SKILLS = ("pandas-kit", "mbom-diff", "where-used")                                                       # .opencode\skills\<이름>\SKILL.md (pandas-kit)
 DEFAULT_SKILLS = ML_SKILLS + OFFICE_SKILLS + PANDAS_SKILLS                                       # 기본 스킬 14개
 ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"     # 시스템 환경 변수 (HKLM)
 USER_ENV_KEY = "Environment"                                                   # 사용자 환경 변수 (HKCU)
