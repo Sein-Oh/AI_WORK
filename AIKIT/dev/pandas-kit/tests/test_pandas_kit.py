@@ -8,6 +8,7 @@ import re
 import shlex
 import sys
 import time
+from datetime import date as dt_date
 
 import openpyxl
 import pandas as pd
@@ -667,3 +668,189 @@ def test_work_option_says_when_the_current_work_folder_changes(env, mbom):
     assert code == 0
     code, out = run(env, "show", "--from", "zz", "--work", first)
     assert code == 1 and out["message"].startswith("지금 작업 폴더를")                                       # 실패해도 옮긴 것은 알림
+
+
+# ---------------------------------------------------------------------------
+# BOM이 아닌 표(공정 기록)로 써 보며 찾은 것 (집 PC 2026-11-14)
+# ---------------------------------------------------------------------------
+
+def _sheet(path, rows, title=None):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    if title:
+        ws.append([title])
+        ws.append([])
+    for r in rows:
+        ws.append(list(r))
+    wb.save(path)
+    return str(path)
+
+
+def test_unit_row_under_the_header_is_read_as_column_units(env):
+    # 머리글 아래 단위 행(°C, bar ...)이 데이터로 읽혀 숫자 열 아홉 개가 모두 글자가 됐고, 조건으로 그 행을 빼도 글자 그대로였음
+    rows = [("반응온도", "유량", "비고"), ("°C", "L/min", None),
+            (192.58, 13.41, "a"), (171.69, 5.02, "b"), (186.82, 14.12, "c")]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "공정.xlsx", rows, "반응 공정 시험 기록"), "--name", "p")
+    cols = {c["name"]: c for c in out["columns"]}
+    assert out["count"] == 3 and cols["반응온도"]["kind"] == "숫자" and cols["반응온도"]["unit"] == "°C"
+    assert cols["유량"]["unit"] == "L/min" and "unit" not in cols["비고"]
+    assert any("머리글 아래 4행(°C, L/min)은 데이터가 아니라 열 단위로" in w for w in out["warnings"])
+    assert ok(env, "show")["rows"][0]["엑셀 행"] == 5                                  # 단위 행(4) 다음부터 데이터
+    assert ok(env, "select", "--from", "p", "--where", "유량<10")["count"] == 1        # 숫자 열이라 숫자 비교
+    kept = ok(env, "select", "--from", "p", "--columns", "반응온도")
+    assert kept["columns"][0]["unit"] == "°C"                                          # 단계를 거쳐도 단위는 남음
+
+
+def test_a_text_row_that_is_not_units_is_kept_as_data(env):
+    # 글자 열이 섞인 보통 표의 첫 행을 단위 행으로 보면 데이터가 사라진다 (숫자 열이 글자가 되는 경우만 단위 행)
+    rows = [("업체", "담당", "수량"), ("한빛볼트", "김", 3), ("대성", "이", 5), ("미래", "박", 7)]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "list.xlsx", rows), "--name", "a")
+    assert out["count"] == 3 and not any("단위" in w for w in out.get("warnings", []))
+    assert ok(env, "show")["rows"][0]["업체"] == "한빛볼트"
+    mixed = [("코드", "수량"), ("A-1", 3), ("A-2", 5), ("A-3", 7)]                      # 글자 열 하나뿐: 단위 행 아님
+    out2 = ok(env, "select", "--file", _sheet(env["dir"] / "m.xlsx", mixed), "--name", "b")
+    assert out2["count"] == 3 and not any("단위" in w for w in out2.get("warnings", []))
+
+
+def test_sort_orders_a_text_number_column_as_numbers(env):
+    # 집 PC 2026-11-14: 글자 열을 글자 순서로 정렬해 유량 5.02를 10.02보다 크다고 했고 알리지도 않았음
+    rows = [("유량", "비고"), (10.02, "a"), (5.02, "b"), (9.5, "c"), ("측정 안 함", "d"), (14.1, "e")]
+    ok(env, "select", "--file", _sheet(env["dir"] / "f.xlsx", rows), "--name", "f")
+    assert {c["name"]: c["kind"] for c in ok(env, "show")["columns"]}["유량"] == "글자"
+    up = ok(env, "sort", "--by", "유량", "--name", "up")
+    assert any("숫자로 읽히는 칸끼리 숫자로 정렬" in w and "1개는 맨 뒤" in w for w in up["warnings"])
+    vals = [r["유량"] for r in ok(env, "show", "--from", "up")["rows"]]
+    assert vals == ["5.02", "9.5", "10.02", "14.1", "측정 안 함"]
+    down = ok(env, "sort", "--from", "f", "--by", "유량", "--desc", "--name", "down")
+    assert [r["유량"] for r in ok(env, "show", "--from", "down")["rows"]][:2] == ["14.1", "10.02"]
+    assert not ok(env, "sort", "--from", "f", "--by", "비고", "--name", "t").get("warnings")   # 글자 열은 그대로
+
+
+def test_same_read_warning_for_many_columns_is_one_line(env):
+    # 열마다 한 줄이면 같은 말이 아홉 줄 (공정 샘플)
+    rows = [("a", "b", "c", "d"), (1, 2, 3, "x"), ("없음", "없음", "없음", "y"), (5, 6, 7, "z"), (8, 9, 10, "w")]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "w.xlsx", rows), "--name", "w")
+    notes = [w for w in out["warnings"] if "숫자 사이에 숫자가 아닌 칸" in w]
+    assert len(notes) == 1 and "a(A), b(B), c(C) 열은 숫자 사이에 숫자가 아닌 칸(엑셀 행 3)" in notes[0]
+
+
+# ---------------------------------------------------------------------------
+# 회사 엑셀에 흔한 모양: 두 줄 머리글, 머리글 없는 열, 천 단위 쉼표·기호·글자 날짜 (집 PC 2026-11-14)
+# ---------------------------------------------------------------------------
+
+def _messy(path):
+    """3행은 병합한 묶음 이름, 4행이 진짜 머리글, G열(입고일)은 묶음 이름이 없다."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "2026년 1분기 구매 집계"
+    ws.append([])
+    ws["A3"], ws["D3"], ws["F3"] = "기본", "금액", "납기"
+    ws.merge_cells("A3:C3")
+    ws.merge_cells("D3:E3")
+    ws.append(["업체", "품번", "수량", "단가", "합계", "요청일", "입고일"])
+    for r in [("한빛볼트", "0101", "1,200", "₩1,500", "1,800,000", "2026.01.05", dt_date(2026, 1, 9)),
+              ("대성윤활", "0102", "350", "₩12,000", "4,200,000", "2026.01.12", dt_date(2026, 1, 15)),
+              ("한빛볼트", "0103", "80", "₩9,900", "792,000", "2026.02.03", dt_date(2026, 2, 6)),
+              ("미래실링", "0104", "2,400", "₩450", "1,080,000", "2026.02.20", dt_date(2026, 2, 25))]:
+        ws.append(list(r))
+    wb.save(path)
+    return str(path)
+
+
+def test_two_row_header_uses_the_lower_row_and_keeps_every_column(env):
+    # 집 PC 2026-11-14: 위의 묶음 이름 줄이 머리글이 되어 열 이름이 '기본', '열_B'가 되고 G열(입고일)이 통째로 빠졌음
+    out = ok(env, "select", "--file", _messy(env["dir"] / "messy.xlsx"), "--name", "구매")
+    names = [c["name"] for c in out["columns"]]
+    assert names == ["업체", "품번", "수량", "단가", "합계", "요청일", "입고일"] and out["count"] == 4
+    assert out["anchor"]["range"] == "A4:G8" and out["anchor"]["header_row"] == 4
+    assert any("머리글이 두 줄이라 아래 줄(4행)" in w and "기본, 금액, 납기" in w for w in out["warnings"])
+    rows = ok(env, "show")["rows"]
+    assert rows[0]["엑셀 행"] == 5 and rows[0]["업체"] == "한빛볼트" and rows[0]["입고일"] == "2026-01-09"
+
+
+def test_a_column_whose_header_is_empty_is_read_but_a_stray_cell_is_not(env):
+    rows = [("업체", "수량", None), ("한빛볼트", 3, "A"), ("대성", 5, "B"), ("미래", 7, "C")]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "noname.xlsx", rows), "--name", "a")
+    assert [c["name"] for c in out["columns"]] == ["업체", "수량", "열_C"]
+    assert any("머리글이 비어 있지만 값이 있는 열 1개(C)" in w for w in out["warnings"])
+    stray = [("업체", "수량"), ("한빛볼트", 3), ("대성", 5), ("미래", 7)]
+    p = _sheet(env["dir"] / "stray.xlsx", stray)
+    wb = openpyxl.load_workbook(p)
+    wb.active["D3"] = "메모 한 칸"                                      # 한 행에만 있는 칸은 열이 아님
+    wb.save(p)
+    out2 = ok(env, "select", "--file", p, "--name", "b")
+    assert [c["name"] for c in out2["columns"]] == ["업체", "수량"]
+
+
+def test_thousands_separator_currency_and_text_dates(env):
+    out = ok(env, "select", "--file", _messy(env["dir"] / "messy.xlsx"), "--name", "구매")
+    kinds = {c["name"]: c["kind"] for c in out["columns"]}
+    assert kinds["수량"] == "숫자" and kinds["합계"] == "숫자" and kinds["요청일"] == "날짜" and kinds["단가"] == "글자"
+    assert any("수량(C), 합계(E) 열은 천 단위 쉼표가 있는 숫자라" in w for w in out["warnings"])
+    assert any("요청일(F) 열은 글자로 적힌 날짜" in w for w in out["warnings"])
+    assert any("단가(D) 열은 숫자에 기호가 붙어" in w and "group --sum으로 더할 수는 없습니다" in w for w in out["warnings"])
+    assert ok(env, "show")["rows"][0]["수량"] == 1200                      # 값은 같고 쉼표만 뺌
+    g = ok(env, "group", "--by", "업체", "--sum", "합계", "--name", "업체별")
+    assert {r["업체"]: r["합계 합계"] for r in ok(env, "show", "--from", "업체별")["rows"]}["한빛볼트"] == 2592000
+    assert ok(env, "select", "--from", "구매", "--where", "요청일>=2026-02-01")["count"] == 2
+    s = ok(env, "sort", "--from", "구매", "--by", "단가", "--desc", "--name", "비싼")
+    assert any("숫자로 읽히는 칸끼리 숫자로 정렬" in w for w in s["warnings"])
+    assert [r["단가"] for r in ok(env, "show", "--from", "비싼")["rows"]][:2] == ["₩12,000", "₩9,900"]
+    code, err = run(env, "group", "--from", "구매", "--by", "업체", "--sum", "단가")
+    assert code == 1 and "숫자 열이 아니어서" in err["message"]
+    rows = [("날짜", "값"), ("05/01/2026", 1), ("06/02/2026", 2), ("07/03/2026", 3)]   # 뜻이 둘인 날짜는 글자 그대로
+    out2 = ok(env, "select", "--file", _sheet(env["dir"] / "amb.xlsx", rows), "--name", "c")
+    assert {c["name"]: c["kind"] for c in out2["columns"]}["날짜"] == "글자"
+
+
+def test_a_blank_row_inside_the_table_asks_which_range(env):
+    # 집 PC 2026-11-14: 표 가운데 빈 행(18·49행) 때문에 BOM 111행 중 69행만 읽고 50행을 머리글로 삼았음
+    rows = [("Level", "Part Number", "Qty")] + [(1, f"{i:04d}", i) for i in range(1, 7)]
+    p = _sheet(env["dir"] / "split.xlsx", rows)
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    ws.insert_rows(5)                                                   # 표 가운데 빈 행
+    wb.save(p)
+    code, out = run(env, "select", "--file", p, "--name", "a")
+    assert code == 1 and out["error_type"] == "needs_user_decision"
+    assert "[후보] 1) 빈 행까지 한 표로 (A1:C8, 빈 행 빼고 6행)" in out["message"]
+    assert "2) A1:C4만 (3행)" in out["message"] and "3) A6:C8만 (2행)" in out["message"]   # 덩어리마다 첫 줄은 머리글
+    whole = ok(env, *command_args(out["confirm_commands"][0]["command"]))
+    assert whole["count"] == 6 and any("범위 안의 빈 행 1개는 뺐습니다" in w for w in whole["warnings"])
+    assert [r["Part Number"] for r in ok(env, "show")["rows"]][:2] == ["0001", "0002"]
+    lower = ok(env, *command_args(out["confirm_commands"][2]["command"]))
+    assert lower["count"] == 2                                          # 고른 덩어리만 읽기도 됨
+    small = [("Level", "Part Number", "Qty")] + [(1, f"{i:04d}", i) for i in range(1, 7)]
+    p2 = _sheet(env["dir"] / "memo.xlsx", small)
+    wb2 = openpyxl.load_workbook(p2)
+    wb2.active["A10"] = "메모"                                          # 표 아래 작은 메모는 묻지 않음 (지금까지와 같게)
+    wb2.save(p2)
+    out2 = ok(env, "select", "--file", p2, "--name", "b")
+    assert out2["count"] == 6 and any("빈 행 아래" in w for w in out2["warnings"])
+
+
+def test_a_code_like_p100_is_not_called_a_number_with_a_symbol(env):
+    # 집 PC 2026-11-14: Work Center(MC-03), Plant(P100)까지 "숫자에 기호가 붙어"로 경고했음
+    rows = [("Work Center", "Plant", "단가"), ("MC-03", "P100", "₩1,500"),
+            ("ASM-01", "P100", "₩12,000"), ("GB-02", "P200", "₩9,900")]
+    out = ok(env, "select", "--file", _sheet(env["dir"] / "code.xlsx", rows), "--name", "a")
+    sym = [w for w in out.get("warnings", []) if "기호가 붙어" in w]
+    assert len(sym) == 1 and "단가(C)" in sym[0] and "Work Center" not in sym[0] and "Plant" not in sym[0]
+
+
+def test_hidden_rows_can_be_left_out_and_group_totals_stay_whole(env):
+    # 집 PC 2026-11-14 (체결 부품 집계): 숨긴 행(폐기 품목)이 합계에 들어가는데 어느 행인지 몰라 뺄 수 없었고, 합계가 33.0으로 나왔음
+    rows = [("Part Number", "Qty"), ("000125", 5), ("110099", 2), ("000125", 8)]
+    p = _sheet(env["dir"] / "h.xlsx", rows)
+    wb = openpyxl.load_workbook(p)
+    wb.active.row_dimensions[3].hidden = True
+    wb.save(p)
+    out = ok(env, "select", "--file", p, "--name", "a")
+    warn = next(w for w in out["warnings"] if "숨긴 행" in w)
+    assert "1개(엑셀 행 3)도 읽었습니다" in warn
+    assert ok(env, "select", "--from", "a", "--where", "엑셀 행>=3", "--name", "c")["count"] == 2
+    assert ok(env, "select", "--from", "a", "--where", "엑셀 행!=3", "--name", "b")["count"] == 2
+    g = ok(env, "group", "--from", "b", "--by", "Part Number", "--sum", "Qty", "--name", "g")
+    assert ok(env, "show", "--from", "g")["rows"][0]["Qty 합계"] == 13           # 13.0이 아니라 13
+    without = ok(env, *command_args(warn.split("빼고 읽으려면: ", 1)[1]))      # 경고가 준 전체 명령 (--name a 그대로라 a를 새로 만듦)
+    assert without["count"] == 2 and without["table"] == "a"

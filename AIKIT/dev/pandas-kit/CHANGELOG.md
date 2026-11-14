@@ -2,6 +2,55 @@
 
 형식: 버전별 `구조 / 기능 / 수정` + 하단 `남은 할 일`.
 
+## [0.2.8] - 2026-11-14
+
+### 스킬
+- `where-used` 기본 스킬 추가 (`AIKIT/.opencode/skills/where-used`, setup 기본 스킬 15개). BOM 한 판에서 품목이 쓰인 상위 조립체와
+  제품 1대당 수량(상위 수량을 곱한 값)을 찾는다. 품번이 같거나 품명에 든 글자로 찾고, 품번 여럿이 걸리면 품번·단위별로 따로 센다.
+  전에는 mbom-diff의 `mbom_path.py`가 두 판을 요구해 같은 표를 두 이름으로 export해야 했다 (개선점_MBOM.md K).
+  시험 `test_where_used_skill.py` (쓰인 곳과 수량, 경로를 따라 곱하기, 품명으로 찾기, 0건·열 못 찾음, SKILL.md 크기).
+
+## [0.2.7] - 2026-11-14
+
+### 수정 (체결 부품을 상위까지 정리하며, 개선점_MBOM.md K)
+- 숨긴 행(폐기 품목)이 집계에 들어가는데 어느 행인지 알 수 없어 뺄 방법이 없었음 -> 경고에 엑셀 행 번호와 그 행을 뺀 전체 명령.
+- `--where`가 `엑셀 행`을 받지 않았음(`join --on`은 받음) -> 받는다. 숨긴 행·메모 줄을 행 번호로 뺄 수 있음.
+- `group --sum`의 합계가 정수를 더해도 소수로 나왔음(`33.0`) -> 더한 값이 모두 정수면 정수로.
+- 시험 `test_hidden_rows_can_be_left_out_and_group_totals_stay_whole`.
+
+## [0.2.6] - 2026-11-14
+
+### 수정 (사용자가 고친 MBOM 두 판을 비교하다가, 개선점_MBOM.md J)
+- 표 가운데 빈 행(사용자가 구역을 나누려고 넣은 18·49행) 때문에 표가 셋으로 갈려 가장 큰 덩어리(69행)만 읽고 그 첫 줄을 머리글로 삼았음.
+  BOM 111행 중 69행만 비교할 뻔했고 경고만 있었음 -> 열이 거의 같은 큰 덩어리가 더 있으면 `[후보]`로 묻는다
+  (1. 빈 행까지 한 표로, 2~4. 덩어리마다 하나씩, 각각 `--range`를 넣은 전체 명령). 표 아래 메모처럼 작거나 열이 다른 덩어리는 지금처럼 `warnings`만.
+  시험 `test_a_blank_row_inside_the_table_asks_which_range`.
+- 0.2.5의 "기호 붙은 숫자" 경고가 `P100`, `MC-03` 같은 코드 열까지 잡았음 -> 앞의 기호는 통화(`₩ $ € ¥ £`)만.
+  시험 `test_a_code_like_p100_is_not_called_a_number_with_a_symbol`.
+
+## [0.2.5] - 2026-11-14
+
+### 수정 (회사 엑셀에 흔한 모양으로 써 보며, 개선점_MBOM.md I)
+- 머리글이 두 줄인 표(위는 병합한 묶음 이름 `기본`·`금액`, 아래가 `업체`·`품번`)에서 위 줄을 머리글로 잡아 열 이름이 `기본`, `열_B`가 되고
+  진짜 머리글이 데이터 첫 행이 됐음 -> 아래 줄을 열 이름으로, `warnings`로 알림. 시험 `test_two_row_header_uses_the_lower_row_and_keeps_every_column`.
+- 머리글 줄에서 값이 찬 칸의 처음~마지막까지만 열로 잡아, 묶음 이름이 없는 끝 열(`입고일`)이 통째로 빠졌음 (조용히 데이터가 사라짐)
+  -> 머리글이 비어도 값이 여러 행에 있으면 그 열도 읽고 `warnings`. 한 행에만 있는 칸은 열로 보지 않음.
+  시험 `test_a_column_whose_header_is_empty_is_read_but_a_stray_cell_is_not`.
+- 천 단위 쉼표(`1,200`)·글자 날짜(`2026.01.05`)가 글자 열이어서 합계·날짜 조건을 쓸 수 없었고 경고도 없었음 -> 숫자·날짜로 읽고 `warnings`
+  (뜻이 둘인 `05/01/2026`은 글자 그대로). 기호가 붙은 숫자(`₩1,500`)는 글자 열로 두되 `warnings`를 내고, 조건·`sort`는 기호를 뺀 숫자로 비교.
+  시험 `test_thousands_separator_currency_and_text_dates`.
+
+## [0.2.4] - 2026-11-14
+
+### 수정 (BOM이 아닌 표로 써 보며, 개선점_MBOM.md H)
+- 머리글 아래 단위 행(`°C`, `bar`, `wt%` ...)이 데이터로 읽혀 숫자 열이 모두 글자 열이 됐고, 조건으로 그 행을 빼도 글자 열 그대로여서
+  `group --sum`·`chart --y`를 아예 쓸 수 없었음 (ml-kit 공정 샘플: 9열 전부) -> 단위 행으로 보고 빼며 `warnings`, 단위는 `columns`의 `unit`.
+  숫자 열이 둘 이상 살아날 때만 단위 행으로 본다 (보통 글자 열은 데이터 그대로). 시험 `test_unit_row_under_the_header_is_read_as_column_units`,
+  `test_a_text_row_that_is_not_units_is_kept_as_data`.
+- `sort`: 글자 열을 글자 순서로 정렬해 유량 5.02가 10.02보다 크다고 했고 알리지도 않았음 (`--where`는 숫자로 비교하는데 `sort`만 달랐음)
+  -> 칸이 대부분 숫자인 글자 열은 숫자로 정렬하고 `warnings`, 숫자가 아닌 칸은 맨 뒤. 시험 `test_sort_orders_a_text_number_column_as_numbers`.
+- 열마다 나오던 같은 읽기 경고(공정 샘플 9줄)를 분류별 한 줄로 묶음. 시험 `test_same_read_warning_for_many_columns_is_one_line`.
+
 ## [0.2.3] - 2026-11-14
 
 ### 사용자 결정 반영 (개선점_MBOM.md F)
