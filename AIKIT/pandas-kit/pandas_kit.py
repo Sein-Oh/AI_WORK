@@ -798,9 +798,18 @@ def _pick_block(rows: List[Tuple[int, List[Any]]], filled_n: List[int], explicit
     return head, above
 
 
+class _WholeTable(Exception):
+    """표 가운데 빈 행: read_table이 빈 행까지 한 표(area)로 다시 읽는다."""
+
+    def __init__(self, area: str, label: str):
+        super().__init__(area)
+        self.area, self.label = area, label
+
+
 def _ask_when_split(rows: List[Tuple[int, List[Any]]], parts: List[List[int]], part: List[int], head: int) -> None:
     """표 가운데 빈 행이 있으면 표가 갈려 한 덩어리만 읽힌다 (집 PC 2026-11-14: 18·49행이 비어 BOM 111행 중 69행만 읽고
-    50행을 머리글로 삼았음). 열이 거의 같은 다른 덩어리가 크면 어디까지가 한 표인지 도구가 정하지 않고 [후보]로 묻는다."""
+    50행을 머리글로 삼았음). 열이 거의 같은 다른 덩어리가 크면 묻지 않고 빈 행까지 한 표로 읽고 알린다
+    (사용자 결정 2026-11-14: 표 가운데 빈 행은 표가 끝난 것이 아님. 전에는 [후보]로 물었음)."""
     mine, my_rows = _part_span(rows, part), part[-1] - head + 1
 
     def area(idx: List[int], cols: List[int]) -> str:
@@ -812,13 +821,7 @@ def _ask_when_split(rows: List[Tuple[int, List[Any]]], parts: List[List[int]], p
         return
     all_cols = sorted(set().union(*(_part_span(rows, p) for p in same)))
     whole = list(range(same[0][0], same[-1][-1] + 1))
-    choices = [f"빈 행까지 한 표로 ({area(whole, all_cols)}, 빈 행 빼고 {sum(len(p) for p in same) - 1}행)"]
-    argv = [argv_setting("--range", area(whole, all_cols))]
-    for p in same[:3]:
-        cols = sorted(_part_span(rows, p))
-        choices.append(f"{area(p, cols)}만 ({len(p) - 1}행)")
-        argv.append(argv_setting("--range", area(p, cols)))
-    raise rt.ask(choices, argv, f"빈 행으로 나뉜 덩어리가 {len(same)}개라 읽을 범위")
+    raise _WholeTable(area(whole, all_cols), f"{area(whole, all_cols)}, 빈 행 빼고 {sum(len(p) for p in same) - 1}행")
 
 
 def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tuple[Any, Dict[str, Any], List[str]]:
@@ -829,7 +832,13 @@ def read_table(path: str, sheet: Optional[str], range_text: Optional[str]) -> Tu
     warnings = list(grid["warnings"])
     rows = grid["rows"]
     filled_n = [sum(not _empty(v) for v in vals) for _, vals in rows]
-    head_i, above = _pick_block(rows, filled_n, grid["explicit_end"])
+    try:
+        head_i, above = _pick_block(rows, filled_n, grid["explicit_end"])
+    except _WholeTable as whole:
+        df, meta, more = read_table(path, sheet, whole.area)
+        more = [w for w in more if "범위 안의 빈 행" not in w]               # 같은 일을 두 번 알리지 않음
+        return df, meta, [f"표 안에 빈 행이 있어 빈 행까지 한 표로 읽었습니다 ({whole.label}). "
+                          "일부만 읽으려면 --range로 범위를 주세요."] + more
     if above:
         span = str(above[0]) if len(above) == 1 else f"{above[0]}~{above[-1]}"
         warnings.append(f"표 위의 다른 내용 {len(above)}행(엑셀 행 {span})은 표가 아니라고 보고 읽지 않았습니다 "

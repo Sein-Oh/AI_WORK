@@ -832,23 +832,22 @@ def test_thousands_separator_currency_and_text_dates(env):
     assert {c["name"]: c["kind"] for c in out2["columns"]}["날짜"] == "글자"
 
 
-def test_a_blank_row_inside_the_table_asks_which_range(env):
-    # 집 PC 2026-11-14: 표 가운데 빈 행(18·49행) 때문에 BOM 111행 중 69행만 읽고 50행을 머리글로 삼았음
+def test_a_blank_row_inside_the_table_is_read_as_one_table_without_asking(env):
+    # 집 PC 2026-11-14: 표 가운데 빈 행(18·49행) 때문에 BOM 111행 중 69행만 읽고 50행을 머리글로 삼았음 -> 0.2.6부터 [후보]로 물음
+    # -> 묻지 않고 빈 행까지 한 표로 읽고 알림 (사용자 결정 2026-11-14, 0.2.12)
     rows = [("Level", "Part Number", "Qty")] + [(1, f"{i:04d}", i) for i in range(1, 7)]
     p = _sheet(env["dir"] / "split.xlsx", rows)
     wb = openpyxl.load_workbook(p)
     ws = wb.active
     ws.insert_rows(5)                                                   # 표 가운데 빈 행
     wb.save(p)
-    code, out = run(env, "select", "--file", p, "--name", "a")
-    assert code == 1 and out["error_type"] == "needs_user_decision"
-    assert "[후보] 1) 빈 행까지 한 표로 (A1:C8, 빈 행 빼고 6행)" in out["message"]
-    assert "2) A1:C4만 (3행)" in out["message"] and "3) A6:C8만 (2행)" in out["message"]   # 덩어리마다 첫 줄은 머리글
-    whole = ok(env, *command_args(out["confirm_commands"][0]["command"]))
-    assert whole["count"] == 6 and any("범위 안의 빈 행 1개는 뺐습니다" in w for w in whole["warnings"])
+    whole = ok(env, "select", "--file", p, "--name", "a")
+    assert whole["count"] == 6 and whole["anchor"]["range"] == "A1:C8"
+    assert whole["warnings"][0] == "표 안에 빈 행이 있어 빈 행까지 한 표로 읽었습니다 (A1:C8, 빈 행 빼고 6행). 일부만 읽으려면 --range로 범위를 주세요."
+    assert not any("범위 안의 빈 행" in w for w in whole["warnings"])           # 같은 일을 두 번 알리지 않음
     assert [r["Part Number"] for r in ok(env, "show", "--from", "a")["rows"]][:2] == ["0001", "0002"]
-    lower = ok(env, *command_args(out["confirm_commands"][2]["command"]))
-    assert lower["count"] == 2                                          # 고른 덩어리만 읽기도 됨
+    lower = ok(env, "select", "--file", p, "--range", "A6:C8", "--name", "b")
+    assert lower["count"] == 2                                          # --range로 덩어리 하나만 읽기도 됨
     small = [("Level", "Part Number", "Qty")] + [(1, f"{i:04d}", i) for i in range(1, 7)]
     p2 = _sheet(env["dir"] / "memo.xlsx", small)
     wb2 = openpyxl.load_workbook(p2)
