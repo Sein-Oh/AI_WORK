@@ -2370,7 +2370,7 @@ train/predict 완성 단계. CLI 인자와 기존 JSON 키는 모두 유지(추�
 - [ ] 회사 PC에서 6타겟 실제 데이터로 `ml_report.py -f` 소요 시간 확인
 
 ### 저장소 지침 반영 (AGENTS.md 2026-10-28, 우선순위 순)
-상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `CLI-dev/README.md` "공통 런타임 구현 규칙"(R1~R9)대로 구현.
+상세 근거: `docs/history/COMPLIANCE_REVIEW_2026-10-28.md`. 공통 키·함수는 `AIKIT/dev/README.md` "공통 런타임 구현 규칙"(R1~R10)대로 구현.
 - [ ] `recovered` 나머지: cp949 -> utf-8-sig 폴백, .xls -> .xlsx 저장 (잠금 새 이름 저장과 덮어쓰기 회피는 2.3.0), 폴백에도 `[WARN]`
 - [ ] 파괴적 작업 미리보기 `--dry-run` (R8): 예측·보고서 `--overwrite` 대상 (학습은 2.9.70, 결과 파일은 도구가 만든 것만 바뀌어 보류)
 - [ ] 테스트 보강: exit 130 롤백, 성공 경로 `VERIFIED:` 검사 확대, 빈 데이터 (덮어쓰기 차단은 2.3.0)

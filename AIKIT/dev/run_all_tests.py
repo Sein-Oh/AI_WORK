@@ -1,6 +1,6 @@
 """CLI 도구 실기 점검 (Windows 회사 PC용, 사람이 실행)
 
-사용법 (C:\\AIKIT\\dev에서. 시험할 도구는 C:\\AIKIT의 ml-kit, office-cli):
+사용법 (C:\\AIKIT\\dev에서. 시험할 도구는 C:\\AIKIT의 ml-kit, office-cli. pandas-kit, bom-kit은 실기 단계가 아직 없고 버전과 오류 로그만 붙임):
     python run_all_tests.py --label 회사PC             # 자동 점검 전부 (질문 없음, 자리 비워도 됨)
     python run_all_tests.py --label 회사PC --outlook   # office 단계에 Outlook(G그룹)도
     python run_all_tests.py --label 회사PC --ask       # office 단계의 눈 확인 질문(y/n)에 답하면서
@@ -49,7 +49,7 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))                 # AIKIT/dev (테스트, 러너)
 CLI_DIR = os.path.dirname(HERE)                                     # 실행 파일 (dev의 부모 폴더 AIKIT)
-TOOLS = ("ml-kit", "office-cli")
+TOOLS = ("ml-kit", "office-cli", "pandas-kit", "bom-kit")
 STAGES = ("diag", "beta", "simplify", "ml", "office", "gemma")      # 실행 순서
 DEFAULT_STAGES = ("diag", "beta", "simplify", "office")
 TITLES = {"diag": "환경 진단", "beta": "ml-kit 베타 점검 (run_beta_check)", "simplify": "사용법 단순성 점검 (run_simplify_check)",
@@ -112,7 +112,7 @@ def tool_versions():
     for tool in TOOLS:
         ver = "?"
         # 작업별 스킬은 C:\AIKIT\.opencode\skills\<이름>\SKILL.md (도구마다 버전은 모두 같음): 도구의 대표 스킬 하나에서 읽음
-        skill = os.path.join(CLI_DIR, ".opencode", "skills", {"ml-kit": "ml-train", "office-cli": "excel-kit"}.get(tool, tool), "SKILL.md")
+        skill = os.path.join(CLI_DIR, ".opencode", "skills", {"ml-kit": "ml-train", "office-cli": "excel-kit", "bom-kit": "mbom-diff"}.get(tool, tool), "SKILL.md")
         try:
             for line in open(skill, encoding="utf-8"):
                 if line.strip().startswith("version:"):
@@ -818,7 +818,8 @@ def step_ml(stage, args, ctx):
 # ---------------------------------------------------------------------------
 def attach_tool_error_logs(rep):
     found = []
-    for tool, env in (("ml-kit", "ML_KIT_DATA_DIR"), ("office-cli", "OFFICE_CLI_DATA_DIR")):
+    for tool, env in (("ml-kit", "ML_KIT_DATA_DIR"), ("office-cli", "OFFICE_CLI_DATA_DIR"),
+                      ("pandas-kit", "PANDAS_KIT_DATA_DIR"), ("bom-kit", "BOM_KIT_DATA_DIR")):
         data = os.environ.get(env) or os.path.join(CLI_DIR, tool, "data")
         n = 0
         for name in ("errors.old.txt", "errors.txt"):

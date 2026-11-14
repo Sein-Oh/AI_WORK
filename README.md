@@ -12,7 +12,7 @@ AI_WORK/
 ├── AGENTS.md                  # 에이전트 공통 규칙 + 사용자 환경 (단일 원본, OpenCode가 자동으로 읽음)
 ├── CLAUDE.md                  # @AGENTS.md 한 줄 (Claude Code용)
 ├── pytest.ini                 # python -m pytest -> AIKIT/dev/ 아래 모든 도구 테스트
-├── pip_install.txt            # WinPython에 두 도구(ml-kit, office-cli)의 패키지를 표준 버전으로 설치하는 명령 (온라인, wheel 받기, 오프라인)
+├── pip_install.txt            # WinPython에 도구들(ml-kit, office-cli, pandas-kit, bom-kit)의 패키지를 표준 버전으로 설치하는 명령 (온라인, wheel 받기, 오프라인)
 ├── docs/
 │   ├── ENVIRONMENT.md         # 표준 사용자 환경 정의 + 도구별 호환 현황
 │   ├── DECISIONS.md           # 원칙급 결정 기록 (지금 유효한 원칙, 폐기·보류)
@@ -29,7 +29,7 @@ AI_WORK/
 │   ├── AGENTS.md              # 전역 지침 (C:\AIKIT 프로젝트의 지침, 설정 파일 없이 폴더 모양으로 읽힘)
 │   ├── .opencode/skills/<이름>/SKILL.md # 프로젝트 스킬: 폴더 하나 = 스킬 하나. 기본 15개(ml-train, ml-dataset, ml-predict, ml-report, ml-map, pandas-kit, mbom-diff, where-used,
 │   │                          #   excel-kit, excel-format-kit, word-kit, ppt-kit, outlook-kit, search-kit, stats-kit), 그 밖은 사용자 스킬(git 제외)
-│   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, 폐쇄망에서 브라우저로 열림)
+│   ├── guide/                 # 사용자(사무직)용 사용 가이드 HTML: office-cli, ml-kit (파일 하나씩, pandas-kit·bom-kit 가이드는 아직 없음, 폐쇄망에서 브라우저로 열림)
 │   ├── opencode.json          # 셸·권한·폐쇄망 잠금 (setup이 사용자 전역 설정에도 합침). 사내 LLM 설정 opencode.jsonc는 사용자 전역 설정에
 │   ├── setup.py / setup.bat   # 배포 설치: 전역 설정에 우리 설정 합치기, 시스템 PATH 등록, 동작 확인
 │   ├── web.bat                # OpenCode Web UI를 바로 띄움 (opencode 2.x: opencode pair의 일회용 로그인 링크를 브라우저로 엶)
@@ -76,7 +76,7 @@ python -m pip install -r AIKIT/dev/ml-kit/requirements.txt
 python -m pip install -r AIKIT/dev/office-cli/requirements.txt
 python -m pytest -q              # 전체 도구 테스트
 ```
-WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 붙여넣어 두 도구의 패키지를 표준 환경 버전으로 설치합니다
+WinPython에서는 `pip_install.txt`의 명령을 WinPython Command Prompt에 붙여넣어 도구들의 패키지를 표준 환경 버전으로 설치합니다
 (온라인 설치, 인터넷 PC에서 wheel 받기, wheel 폴더로 오프라인 설치).
 폐쇄망 설치는 [`docs/WINDOWS_OFFLINE.md`](docs/WINDOWS_OFFLINE.md), 에이전트 연동은 `AIKIT/.opencode/skills/<이름>/SKILL.md`와 전역 지침 `AIKIT/AGENTS.md`.
 

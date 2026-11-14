@@ -175,7 +175,7 @@ def test_tool_error_logs_appended_at_the_end(iso, monkeypatch, capsys):
     _fake_runners(monkeypatch, [], {"beta": _beta})
     rat.main(["--only", "diag,beta", "--label", "x"])
     text = (iso / _result_files(iso)[0]).read_text(encoding="utf-8")
-    assert "| 도구 오류 로그 | - | - | - | - | - | ml-kit 2건, office-cli 0건 |" in text
+    assert "| 도구 오류 로그 | - | - | - | - | - | ml-kit 2건, office-cli 0건, pandas-kit 0건, bom-kit 0건 |" in text
     assert text.index("BETA-DETAIL") < text.index("### ml-kit errors.txt") < text.index("명령: y")
     assert text.rstrip().endswith("```")                        # the log is the last thing in the file
 
