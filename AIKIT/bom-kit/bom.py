@@ -387,6 +387,13 @@ def result_dir(original: str) -> str:
         n += 1
 
 
+def beside(target: str, what: str) -> str:
+    """사용자가 볼 결과 파일: 대상 파일과 같은 폴더의 <대상 이름>_<what>_<시각> (전역 지침 2장 '결과 파일 위치', 사용자 지적 2026-11-14).
+    _bom 결과 폴더에는 도구가 다시 쓰는 것(비교 기록, 칠할 칸 목록, 변경내용 csv)만 둔다."""
+    t = os.path.abspath(target)
+    return stamped(os.path.dirname(t), f"{file_part(os.path.splitext(os.path.basename(t))[0], 60)}_{what}")
+
+
 def stamped(folder: str, base: str) -> str:
     """결과 파일 이름 앞부분: <base>_<YYYYMMDD_HHMMSS> (사용자 결정 2026-11-14: 결과 파일은 덮어쓰지 않고 실행마다 새 이름, R4).
     같은 초에 같은 이름이 있으면 _2, _3."""
@@ -434,7 +441,8 @@ def _pk_error(out: Dict[str, Any], who: str) -> Exception:
     cmds = [c.get("command", "") for c in out.get("confirm_commands") or []]
     if "[추천] " in msg:
         cmds = [msg.split("[추천] ", 1)[1]]
-    fixed = []
+    fixed: List[List[str]] = []
+    picks: List[Tuple[str, str]] = []
     for c in cmds:
         try:
             parts = shlex.split(c)
@@ -448,6 +456,7 @@ def _pk_error(out: Dict[str, Any], who: str) -> Exception:
         # 새 판에서 물으면 새 판만 (--new-sheet), 범위는 판마다 다름 (--old-range, --new-range)
         name = opt if not side or (side == "old" and opt == "--sheet") else f"--{side}-{opt[2:]}"
         fixed.append(argv_setting(name, parts[parts.index(opt) + 1]))
+        picks.append((name, parts[parts.index(opt) + 1]))
     if fixed and "[추천] " in msg:
         return rt.InputError(pre + msg.split("[추천] ", 1)[0] + f"[추천] {rt.full_command(fixed[0])}")
     if fixed:
@@ -455,6 +464,7 @@ def _pk_error(out: Dict[str, Any], who: str) -> Exception:
         if len(labels) == len(fixed):
             err = rt.ask(labels, fixed, msg.split(" [후보]", 1)[0].removesuffix("을(를) 정해야 합니다."))
             err.args = (pre + err.args[0],) + err.args[1:]
+            err.choices = list(zip(labels, picks))          # _diff가 두 판의 범위를 한 번에 물을 때 씀
             return err
     # 그 밖의 실패(파일 없음, 저장 안 된 문서 등)는 그대로 알림 (pandas-kit 명령은 주지 않음: 이어서 할 일은 bom.py 하나)
     text = re.sub(r" ?\[(추천|후보)\].*$", "", msg)
@@ -470,7 +480,17 @@ def _table_name(path: str) -> str:
 def read_bom(pk: PandasKit, file: str, name: str, who: str, sheet: Optional[str], rng: Optional[str]) -> Tuple[str, str, List[int]]:
     """pandas-kit으로 BOM 읽기 -> export csv. (csv 경로, 읽은 범위 preview, 읽은 숨긴 행의 엑셀 행)."""
     args = ["select", "--file", file, "--name", name] + (["--sheet", sheet] if sheet else []) + (["--range", rng] if rng else [])
-    got = pk.run(args, who, shell="bash")                      # [후보] 명령을 나눠 읽으려고 bash 따옴표 (_pk_error)
+    try:
+        got = pk.run(args, who, shell="bash")                  # [후보] 명령을 나눠 읽으려고 bash 따옴표 (_pk_error)
+    except rt.InputError as e:
+        # 표 안에 빈 행이 있어 범위를 물으면 묻지 않고 빈 행까지 한 표로 읽고 알림 (사용자 결정 2026-11-14:
+        # BOM 가운데 빈 행은 표가 끝난 것이 아님. 전에는 옛 판·새 판마다 [후보]로 물었음)
+        whole = next((c for c in getattr(e, "choices", None) or [] if c[0].startswith(WHOLE)), None)
+        if rng or not whole:
+            raise
+        got = pk.run(args + ["--range", whole[1][1]], who, shell="bash")
+        pk.warnings = [w for w in pk.warnings if not (w.startswith(f"{who}: ") and "범위 안의 빈 행" in w)]
+        pk.warnings.append(f"{who}: 표 안에 빈 행이 있어 빈 행까지 한 표로 읽었습니다 ({whole[0][len(WHOLE):].strip(' ()')}).")
     out = pk.run(["export", "--from", name, "--save", f"{name}.csv"], who)
     return out["output_file"], got.get("preview", ""), [int(r) for r in got.get("hidden_rows") or []]
 
@@ -511,10 +531,83 @@ def _siblings(path: str) -> Dict[str, Tuple[str, str]]:
     return spot
 
 
+def _pns(key: str) -> List[str]:
+    return [p.rpartition(KEY_NUM)[0] for p in key.split(KEY_SEP)]
+
+
+def _row_no(v: Any) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def _removed_parents(dels: List[Tuple[str, str]], adds: List[Tuple[str, str]]):
+    """상위 행이 지워져 그 하위가 새 판에서 다른 상위 아래로 붙은 것 (Level만 보고 상위를 정하므로 바로 위 형제에 붙음).
+    지운 상위마다 하위를 행 순서대로 같은 상대 경로(품번)의 추가 행과 짝지음 (집 PC 2026-11-14 sample1·2: 상위 2개를 지웠는데
+    하위 수십 행이 '삭제 + 추가'로 나와 추가 38, 삭제 39였음). -> [(상위 키, 옛 행, 새 상위 키, [(옛 키, 옛 행, 새 키, 새 행)])]"""
+    used_d, used_a, out = set(), set(), []
+    adds_sorted = sorted(adds, key=lambda x: _row_no(x[1]))
+    for pk_, prow in sorted(dels, key=lambda x: (len(x[0].split(KEY_SEP)), _row_no(x[1]))):
+        if pk_ in used_d:
+            continue
+        plen = len(pk_.split(KEY_SEP))
+        desc = sorted([(k, r) for k, r in dels if k.startswith(pk_ + KEY_SEP) and k not in used_d], key=lambda x: _row_no(x[1]))
+        if not desc:
+            continue
+        best: Dict[str, List[Tuple[str, str, str, str]]] = {}
+        for x in {KEY_SEP.join(ak.split(KEY_SEP)[:len(_pns(ak)) - len(_pns(dk)[plen:])])
+                  for dk, _ in desc for ak, _ in adds_sorted
+                  if ak not in used_a and len(_pns(ak)) > len(_pns(dk)[plen:]) and _pns(ak)[-len(_pns(dk)[plen:]):] == _pns(dk)[plen:]}:
+            pairs, taken, last = [], set(), -1.0
+            for dk, dr in desc:                          # 행 순서를 지키며 같은 상대 경로의 추가 행과 짝
+                rel = _pns(dk)[plen:]
+                for ak, ar in adds_sorted:
+                    if ak in used_a or ak in taken or _row_no(ar) <= last or not ak.startswith(x + KEY_SEP):
+                        continue
+                    if _pns(ak)[len(x.split(KEY_SEP)):] == rel:
+                        pairs.append((dk, dr, ak, ar))
+                        taken.add(ak)
+                        last = _row_no(ar)
+                        break
+            if len(pairs) > len(best.get("p", [])):
+                best = {"x": [x], "p": pairs}
+        pairs = best.get("p", [])
+        if not pairs or len(pairs) * 2 < len(desc):     # 하위의 절반도 못 찾으면 묶지 않음 (짐작하지 않음)
+            continue
+        used_d.add(pk_)
+        used_d.update(p[0] for p in pairs)
+        used_a.update(p[2] for p in pairs)
+        out.append((pk_, prow, best["x"][0], pairs))
+    return out
+
+
 def summarize(rows: List[Dict[str, str]], ocol: str, ncol: str, order: Optional[List[Dict[str, Tuple[str, str]]]] = None):
     dels = [(r["경로"], r.get(ocol) or "") for r in rows if r["구분"] == "삭제"]
     adds = [(r["경로"], r.get(ncol) or "") for r in rows if r["구분"] == "추가"]
-    lines, counts = [], {"대체 후보": 0, "추가": 0, "삭제": 0, "바뀐 칸": 0}
+    lines, counts = [], {"상위 삭제": 0, "대체 후보": 0, "추가": 0, "삭제": 0, "바뀐 칸": 0}
+    moved_rows: Dict[str, set] = {"old": set(), "new": set()}
+    items: List[Dict[str, Any]] = []
+
+    def item(kind: str, pn: str, parent: str, col: str = "", ov: str = "", nv: str = "", orow: Any = "", nrow: Any = "",
+             note: str = "") -> None:
+        items.append({"구분": kind, "품번": pn, "위치": SHOWN.get(parent, parent) or "(최상위)", "열": col, "옛 값": ov, "새 값": nv,
+                      "옛 엑셀 행": _int(orow) or "", "새 엑셀 행": _int(nrow) or "", "비고": note})
+    summarize.items = items
+    for pk_, prow, new_parent, pairs in _removed_parents(dels, adds):
+        parent, pn = split(pk_)
+        lines.append(f"[상위 삭제] {pn}: {where(parent)} (옛 엑셀 행 {prow}). 그 하위 {len(pairs)}행은 새 판에서 "
+                     f"{SHOWN.get(new_parent, new_parent)} 아래에 그대로 있음 (옛 엑셀 행 {pairs[0][1]}~{pairs[-1][1]}, "
+                     f"새 엑셀 행 {pairs[0][3]}~{pairs[-1][3]})")
+        counts["상위 삭제"] += 1
+        item("상위 삭제", pn, parent, orow=prow, note=f"하위 {len(pairs)}행은 새 판에서 {SHOWN.get(new_parent, new_parent)} 아래에 그대로 "
+             f"(옛 엑셀 행 {pairs[0][1]}~{pairs[-1][1]}, 새 엑셀 행 {pairs[0][3]}~{pairs[-1][3]})")
+        gone = {pk_} | {p[0] for p in pairs}
+        dels = [d for d in dels if d[0] not in gone]
+        adds = [x for x in adds if x[0] not in {p[2] for p in pairs}]
+        moved_rows["old"].update(str(p[1]) for p in pairs)
+        moved_rows["new"].update(str(p[3]) for p in pairs)
+    summarize.moved_rows = moved_rows                    # _diff가 칠할 칸 목록에서 뺌
     # 대체 후보: 같은 상위 아래, 앞이나 뒤의 형제 품번이 같은 자리 (형제 순서를 모르면 삭제 하나·추가 하나일 때만).
     # 같은 품번이 삭제와 추가에 모두 있으면 옮겨진 품목이라 대체 짝에서 뺌 (삭제·추가로 둠)
     moved = {split(x[0])[1] for x in dels} & {split(x[0])[1] for x in adds}
@@ -532,15 +625,18 @@ def summarize(rows: List[Dict[str, str]], ocol: str, ncol: str, order: Optional[
         add = same_a[0]
         lines.append(f"[대체 후보] {split(d[0])[1]} -> {split(add[0])[1]}: {where(parent)} 같은 자리 "
                      f"(옛 엑셀 행 {d[1]}, 새 엑셀 행 {add[1]})")
+        item("대체 후보", f"{split(d[0])[1]} -> {split(add[0])[1]}", parent, orow=d[1], nrow=add[1], note="같은 자리 (도구의 짐작)")
         dels.remove(d)
         adds.remove(add)
         counts["대체 후보"] += 1
     for path, row in adds:
         parent, pn = split(path)
         lines.append(f"[추가] {pn}: {where(parent)} (새 엑셀 행 {row})")
+        item("추가", pn, parent, nrow=row)
     for path, row in dels:
         parent, pn = split(path)
         lines.append(f"[삭제] {pn}: {where(parent)} (옛 엑셀 행 {row})")
+        item("삭제", pn, parent, orow=row)
     counts["추가"], counts["삭제"] = len(adds), len(dels)
     changed: Dict[str, List[Dict[str, str]]] = {}
     for r in rows:
@@ -551,7 +647,88 @@ def summarize(rows: List[Dict[str, str]], ocol: str, ncol: str, order: Optional[
         cells = ", ".join(f"{r['열']} {_num(r['옛 값']) or '(빈 칸)'} -> {_num(r['새 값']) or '(빈 칸)'}" for r in rs)
         lines.append(f"[바뀜] {pn} ({where(parent)}): {cells} (옛 엑셀 행 {rs[0].get(ocol)}, 새 엑셀 행 {rs[0].get(ncol)})")
         counts["바뀐 칸"] += len(rs)
+        for r in rs:
+            item("바뀜", pn, parent, r["열"], _num(r["옛 값"]), _num(r["새 값"]), rs[0].get(ocol), rs[0].get(ncol))
     return lines, counts, len(changed)
+
+
+def _xml(v: Any) -> str:
+    t = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(v))
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def write_xlsx(path: str, sheets: List[Tuple[str, List[str], List[List[Any]], List[int]]], what: str) -> Tuple[str, bool]:
+    """시트들 [(이름, 머리글, 행들, 열 너비)] -> xlsx (Excel 2007+ 최소 구조, 글자는 inlineStr, 정수만 숫자, 머리글 굵게·틀 고정).
+    잠겨 있으면 시각을 붙인 이름. (실제 경로, 다시 열어 시트마다 행 수가 같은지)."""
+    import zipfile
+
+    def col(i: int) -> str:
+        out = ""
+        while i:
+            i, r = divmod(i - 1, 26)
+            out = chr(65 + r) + out
+        return out
+
+    def cell(ref: str, v: Any, bold: bool = False) -> str:
+        if isinstance(v, int) and not isinstance(v, bool):
+            return f'<c r="{ref}"><v>{v}</v></c>'
+        return f'<c r="{ref}" t="inlineStr"{" s=\"1\"" if bold else ""}><is><t xml:space="preserve">{_xml(v)}</t></is></c>'
+
+    def sheet_xml(head: List[str], body: List[List[Any]], widths: List[int]) -> str:
+        rows = [f'<row r="1">' + "".join(cell(f"{col(j)}1", h, True) for j, h in enumerate(head, 1)) + "</row>"]
+        for i, r in enumerate(body, 2):
+            rows.append(f'<row r="{i}">' + "".join(cell(f"{col(j)}{i}", v) for j, v in enumerate(r, 1) if v not in (None, "")) + "</row>")
+        cols = "".join(f'<col min="{j}" max="{j}" width="{w}" customWidth="1"/>' for j, w in enumerate(widths, 1))
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+                f'</sheetView></sheetViews>{"<cols>" + cols + "</cols>" if cols else ""}<sheetData>{"".join(rows)}</sheetData></worksheet>')
+    ns = "http://schemas.openxmlformats.org"
+    files = {
+        "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Types xmlns="{ns}/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        + "".join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                  for i in range(1, len(sheets) + 1)) + "</Types>",
+        "_rels/.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Relationships xmlns="{ns}/package/2006/relationships"><Relationship Id="rId1" '
+        f'Type="{ns}/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        "xl/workbook.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<workbook xmlns="{ns}/spreadsheetml/2006/main" xmlns:r="{ns}/officeDocument/2006/relationships"><sheets>'
+        + "".join(f'<sheet name="{_xml(n[:31])}" sheetId="{i}" r:id="rId{i}"/>' for i, (n, _h, _b, _w) in enumerate(sheets, 1))
+        + "</sheets></workbook>",
+        "xl/_rels/workbook.xml.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Relationships xmlns="{ns}/package/2006/relationships">'
+        + "".join(f'<Relationship Id="rId{i}" Type="{ns}/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>'
+                  for i in range(1, len(sheets) + 1))
+        + f'<Relationship Id="rId{len(sheets) + 1}" Type="{ns}/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+        "xl/styles.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<styleSheet xmlns="{ns}/spreadsheetml/2006/main"><fonts count="2"><font><sz val="10"/><name val="맑은 고딕"/></font>'
+        '<font><b/><sz val="10"/><name val="맑은 고딕"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders>'
+        '<cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf fontId="0"/><xf fontId="1" applyFont="1"/></cellXfs>'
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
+    }
+    for i, (_n, head, body, widths) in enumerate(sheets, 1):
+        files[f"xl/worksheets/sheet{i}.xml"] = sheet_xml(head, body, widths)
+
+    def writer(p_: str) -> None:
+        with zipfile.ZipFile(p_, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, text in files.items():
+                z.writestr(name, text.encode("utf-8"))
+    saved = rt.save_with_lock_fallback(path, writer, what)
+    try:
+        with zipfile.ZipFile(saved) as z:
+            ok_ = all(z.read(f"xl/worksheets/sheet{i}.xml").decode("utf-8").count("<row ") == len(b) + 1
+                      for i, (_n, _h, b, _w) in enumerate(sheets, 1))
+    except (OSError, KeyError, zipfile.BadZipFile):
+        ok_ = False
+    return saved, ok_
+
+
+REPORT_COLS = ["구분", "품번", "위치", "열", "옛 값", "새 값", "옛 엑셀 행", "새 엑셀 행", "비고"]
 
 
 def cmd_diff(a: Any) -> Dict[str, Any]:
@@ -605,6 +782,9 @@ def _paired_changes(o: Dict[str, Any], n: Dict[str, Any], pairs: List[Tuple[str,
     return rows
 
 
+WHOLE = "빈 행까지 한 표로"                 # pandas-kit이 빈 행으로 나뉜 표에서 주는 첫 [후보]
+
+
 def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
     o_csv, o_read, _ = read_bom(pk, a.old, "old", "옛 판", a.old_sheet or a.sheet, a.old_range)
     n_csv, n_read, _ = read_bom(pk, a.new, "new", "새 판", a.new_sheet or a.sheet, a.new_range)
@@ -640,43 +820,64 @@ def _diff(a: Any, pk: PandasKit) -> Dict[str, Any]:
     shown_rows = [dict(r, 경로=SHOWN.get(r["경로"], r["경로"])) for r in rows]
     changes, _ok = write_csv(stem + "_변경내용.csv", head_cols, [[r.get(c, "") for c in head_cols] for r in shown_rows], "변경내용 파일")
     order = [_siblings(o["save"]), _siblings(n["save"])]
+    summarize.moved_rows, summarize.items = {"old": set(), "new": set()}, []
     lines, counts, nrows = summarize(rows, "oldp 행", "newp 행", order) if rows else ([], {}, 0)
+    moved, items = summarize.moved_rows, summarize.items
     head = ("두 판이 같습니다 (찾은 변경 없음)." if not lines else
             "변경 " + ", ".join(f"{k} {v}" + ("곳" if k == "바뀐 칸" else "건") for k, v in counts.items() if v)
             + (f" ({nrows}개 품목)" if counts.get("바뀐 칸") else "") + ".")
     if limits:                                            # 비교하지 못한 것은 첫 줄에 (warnings는 뒤에 있어 빠뜨리기 쉬움)
         head = "주의: " + "; ".join(limits) + ". 아래 결과는 그것을 뺀 비교입니다.\n" + head
-    text = "\n".join([head] + lines) + "\n"
-
-    def writer(p: str) -> None:
-        with open(p, "w", encoding="utf-8-sig") as f:
-            f.write(text)
-    save = rt.save_with_lock_fallback(stem + "_요약.txt", writer, "요약 파일")
-    files_ok = len(rt.read_text_file(save).splitlines()) == len(text.splitlines()) and o["ok"] and n["ok"] and _ok
+    files_ok = o["ok"] and n["ok"] and _ok                 # 요약은 비교 결과 엑셀의 요약 시트 (txt는 만들지 않음)
     verified = files_ok and not limits
-    unverified = None if verified else (limits or ["저장한 요약·경로 파일을 확인하지 못함"])
+    unverified = None if verified else (limits or ["저장한 경로·변경내용 파일을 확인하지 못함"])
     shown = lines[:LINE_MAX]
     read = f"읽은 표: 옛 판 {o_read.split(' = ', 1)[-1]}, 새 판 {n_read.split(' = ', 1)[-1]}."
-    preview = "\n".join([head] + shown + ([f"(나머지 {len(lines) - len(shown)}줄은 {save})"] if len(lines) > len(shown) else [])
-                        + [read])
+    warnings = pk.warnings + o["warnings"] + n["warnings"]
+    # 비교 결과 엑셀 파일 (사용자 결정 2026-11-14): 요약 시트(건수·줄·읽은 표·알림)와 변경내용 시트(한 줄에 한 변경, 바뀐 칸은 칸마다)
+    summary_rows = [[x] for x in head.splitlines() + lines + [read]] + [[f"알림: {w}"] for w in warnings]
+    new_name = file_part(os.path.splitext(os.path.basename(a.new))[0], 60)
+    report, report_ok = write_xlsx(beside(a.old, f"{new_name}_비교결과") + ".xlsx", [
+        ("요약", [f"{os.path.basename(a.old)} -> {os.path.basename(a.new)} 비교 ({datetime.now():%Y-%m-%d %H:%M})"], summary_rows, [120]),
+        ("변경내용", REPORT_COLS, [[it[c] for c in REPORT_COLS] for it in items], [10, 18, 40, 14, 18, 18, 10, 10, 60])], "비교 결과 파일")
+    verified = verified and report_ok
+    if not report_ok:
+        unverified = (unverified or []) + ["저장한 비교 결과 엑셀 파일을 다시 읽어 확인하지 못함"]
+    preview = "\n".join([head] + shown + ([f"(나머지 {len(lines) - len(shown)}줄은 {report})"] if len(lines) > len(shown) else [])
+                        + [read, f"비교 결과 파일: {report}"])
     then = ("preview를 그대로 사용자에게 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요."
             + (" [대체 후보]는 도구의 짐작이니 맞는지 사용자에게 확인하세요." if counts.get("대체 후보") else "")
             + ("" if lines else " 0건. 찾은 변경이 없습니다."))
     out = rt.ok("diff", preview, verified, then, unverified,
-                count=len(lines), counts=counts, lines=shown, truncated=len(lines) > len(shown), output_file=save,
-                changes_file=changes, result_folder=folder)
+                count=len(lines), counts=counts, lines=shown, truncated=len(lines) > len(shown), output_file=report,
+                changes_file=changes)                     # 변경내용 csv (_bom 결과 폴더, history가 모음)
     paint = diff.get("confirm_commands") or []
     for f in diff.get("paint_files") or []:              # 칠할 칸 목록도 결과 폴더로 (confirm_commands가 다음 턴에도 되게)
         side = "옛판" if "_칠할칸_old_" in os.path.basename(f) else "새판"
-        kept = _keep(f, f"{stem}_칠할칸_{side}.csv", "칠할 칸 파일")
-        for c in paint:
-            c["command"] = c["command"].replace(rt.quote_arg(f), rt.quote_arg(kept))
+        drop = moved["old" if side == "옛판" else "new"]   # 상위만 지워져 다른 상위에 붙은 하위 행은 칠하지 않음
+        cells = [x for x in rt.read_text_file(f).splitlines() if x.strip()
+                 and not set(re.findall(r"[A-Z]+(\d+)", x)) & drop]
+        cmd = next((c for c in paint if rt.quote_arg(f) in c["command"]), None)
+        if not cells:
+            if cmd:
+                paint.remove(cmd)
+            continue
+        text = "\n".join(cells) + "\n"
+
+        def writer(p_: str, text: str = text) -> None:
+            with open(p_, "w", encoding="utf-8-sig") as h:
+                h.write(text)
+        kept = rt.save_with_lock_fallback(f"{stem}_칠할칸_{side}.csv", writer, "칠할 칸 파일")
+        if cmd:
+            cmd["command"] = cmd["command"].replace(rt.quote_arg(f), rt.quote_arg(kept))
+            if drop:
+                orig = os.path.basename(a.old if side == "옛판" else a.new)
+                cmd["purpose"] = f"원본 {orig}의 {'삭제된' if side == '옛판' else '추가된'} 행과 바뀐 칸을 노랗게 칠하기 (사용자가 원할 때만, office-cli)"
     kept_paint = [f"{stem}_칠할칸_{x}.csv" for x in ("옛판", "새판") if os.path.isfile(f"{stem}_칠할칸_{x}.csv")]
-    _write_record(stem, a, counts, head, save, changes, kept_paint, verified)     # history가 읽는 기록
+    _write_record(stem, a, counts, head, report, changes, kept_paint, verified)     # history가 읽는 기록
     if paint:                                    # 원본에 바뀐 칸 칠하기 (office-cli, 사용자가 원할 때만)
         out["confirm_commands"] = paint
         out["agent_directive"] += " confirm_commands는 원본 엑셀에 바뀐 칸을 칠하는 명령입니다. 사용자가 칠해 달라고 할 때만 1번 실행하세요."
-    warnings = pk.warnings + o["warnings"] + n["warnings"]
     if warnings:
         out["warnings"] = warnings
         out["agent_directive"] += " warnings도 그대로 알리세요."
@@ -706,8 +907,7 @@ def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
     name: Dict[str, str] = {}
     for i in hits:
         name.setdefault(str(i["r"].get(pcol) or "").strip(), str(i["r"].get(dcol) or "").strip() if dcol else "")
-    folder = result_dir(a.file)
-    save, ok_ = write_csv(stamped(folder, f"쓰인곳_{file_part(a.find)}") + ".csv",
+    save, ok_ = write_csv(beside(a.file, f"쓰인곳_{file_part(a.find)}") + ".csv",
                           [ROW, "품번", "품명", "상위 품번", "경로", "그 자리 수량", "제품 1대당 수량", "단위"],
                           [[i["r"].get(ROW), i["r"].get(pcol), i["r"].get(dcol) if dcol else "", i["parent"], i["path"],
                             "" if i["qty"] is None else number(i["qty"]), "" if i["total"] is None else number(i["total"]),
@@ -726,7 +926,7 @@ def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
     if not hits:
         out = rt.ok("where-used", limit + f"'{a.find}'을(를) 품번이나 품명에서 찾지 못했습니다 (BOM {len(items)}행, {read.split(' = ', 1)[-1]}).", ok_,
                     "0건. 찾은 품목이 없습니다. preview를 그대로 알리고 다시 실행하지 마세요. 품번이나 품명의 일부를 --find에 주세요.",
-                    unverified, count=0, lines=[], output_file=save, result_folder=folder)
+                    unverified, count=0, lines=[], output_file=save)
     else:
         parent_name: Dict[str, str] = {}
         if dcol:
@@ -752,8 +952,7 @@ def _where_used(a: Any, pk: PandasKit) -> Dict[str, Any]:
         out = rt.ok("where-used", preview, ok_,
                     "preview의 줄을 사용자에게 그대로 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요."
                     + (" 잘렸으면 전체는 output_file에 있습니다." if len(lines) > LINE_MAX else ""),
-                    unverified, count=len(hits), lines=shown, totals=sums, truncated=len(lines) > LINE_MAX, output_file=save,
-                    result_folder=folder)
+                    unverified, count=len(hits), lines=shown, totals=sums, truncated=len(lines) > LINE_MAX, output_file=save)
     if warnings:
         out["warnings"] = warnings
         out["agent_directive"] += " warnings도 그대로 알리세요."
@@ -873,8 +1072,7 @@ def cmd_history(a: Any) -> Dict[str, Any]:
                 if c not in head_cols:
                     head_cols.append(c)
             body.append(dict(row, **{"비교 시각": at, "옛 판": old, "새 판": new}))
-    folder = result_dir(start)
-    save, ok_ = write_csv(stamped(folder, f"변경이력_{file_part(os.path.splitext(name)[0])}") + ".csv", head_cols,
+    save, ok_ = write_csv(beside(start, "변경이력") + ".csv", head_cols,
                           [[b.get(c, "") for c in head_cols] for b in body], "변경 이력 파일")
     shown = lines[:LINE_MAX]
     more = [f"(나머지 {len(lines) - len(shown)}줄은 {save})"] if len(lines) > len(shown) else []
@@ -883,7 +1081,7 @@ def cmd_history(a: Any) -> Dict[str, Any]:
                         + [f"변경 이력 파일: {save} (변경 {len(body)}줄)"])
     out = rt.ok("history", preview, ok_, "preview를 그대로 사용자에게 알리세요 (줄을 직접 세거나 고쳐 쓰지 마세요). 같은 명령을 다시 실행하지 마세요.",
                 None if ok_ else ["저장한 변경 이력 파일의 행 수를 확인하지 못함"], count=len(recs), lines=shown,
-                truncated=len(lines) > len(shown), output_file=save, result_folder=folder)
+                truncated=len(lines) > len(shown), output_file=save)
     if warnings:
         out["warnings"] = warnings
         out["agent_directive"] += " warnings도 그대로 알리세요."

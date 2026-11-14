@@ -187,8 +187,12 @@ def new_work_folder(source: str) -> str:
     base = os.path.splitext(os.path.basename(source))[0]
     stem = os.path.join(os.path.dirname(os.path.abspath(source)), f"{base}_{datetime.now():%y%m%d%H%M}")
     path, n = stem, 2
-    while os.path.exists(path):
-        path, n = f"{stem}_{n}", n + 1
+    while True:                           # os.mkdir가 실패하면 다른 실행이 같은 이름을 먼저 만든 것: 다음 번호 (동시 실행)
+        try:
+            os.mkdir(path)
+            break
+        except FileExistsError:
+            path, n = f"{stem}_{n}", n + 1
     os.makedirs(os.path.join(path, "tables"))
     with open(os.path.join(path, MARKER), "w", encoding="utf-8") as f:
         f.write(f"{rt.TOOL_NAME} {rt.VERSION}\n")
